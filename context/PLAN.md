@@ -15,6 +15,53 @@ demoable system — never a half-broken one.
 
 ---
 
+## Implementation status (live tracker)
+
+> Updated: 2026-06-18 — Legend: **Done** / **In progress** / **Not started** / **Deferred**
+
+| Phase | Status | Notes |
+|---|---|---|
+| 0 — Scaffolding | In progress (core done) | Postgres + `/healthz` live; Redis/Alembic/README deferred until needed |
+| 1 — MVP (fan-out-on-read) | Not started | Next up |
+| 2 — Redis timelines + workers | Not started | Redis is introduced here, not in Phase 0 |
+| 3 — Celebrity hybrid | Not started | |
+| 4 — Optimization + benchmarks | Not started | |
+| 5 — Fault tolerance | Not started | |
+| 6 — Observability | Not started | |
+| 7 — Packaging + deploy | Not started | |
+| 8 — Docs + résumé | Not started | |
+
+### Deliberate deviations from the original plan
+- **Redis is deferred to Phase 2** (where it is first used) instead of Phase 0, to keep each
+  step minimal. The Phase 0 compose currently runs **Postgres only**.
+- **Alembic migrations + schema** will be added at the **start of Phase 1**, when the first
+  tables are actually needed.
+- Dev model: the **API runs in a local venv**; **Postgres runs in Docker**. Containerising the
+  API itself is a Phase 7 packaging concern.
+
+### Phase 0 checklist
+- [x] Repo layout (`backend/app`, `frontend/`, `docker-compose.yml`, `.env`)
+- [x] Docker Compose — **Postgres** service (healthcheck + named volume)
+- [x] FastAPI app with config loading + `/healthz` pinging Postgres
+- [x] Secret hygiene — real creds only in git-ignored `backend/.env`; committed files use placeholders
+- [x] Root `.gitignore` (Python) + `.vscode/settings.json` pointing at the venv interpreter
+- [ ] Redis service — **deferred to Phase 2**
+- [ ] Alembic migrations + schema — **deferred to Phase 1 start**
+- [ ] README "how to run" + Makefile — **deferred**
+
+**Phase 0 Definition of Done:** `docker compose up` starts Postgres — done; `GET /healthz`
+returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the DoD moves to Phase 2.)
+
+### Current state snapshot (files)
+- `backend/app/main.py` — FastAPI app; `/healthz` pings Postgres; lifespan disposes the engine
+- `backend/app/config.py` — pydantic-settings; `database_url` is **required** (no fallback), loaded from `.env`
+- `backend/app/db.py` — async SQLAlchemy engine + `async_sessionmaker` + `get_session()` dependency
+- `backend/requirements.txt` — fastapi, uvicorn[standard], sqlalchemy[asyncio], asyncpg, pydantic-settings
+- `docker-compose.yml` — `postgres:16-alpine`, `env_file: backend/.env`, healthcheck
+- `frontend/` — default Next.js scaffold (untouched; the feed UI is built in Phase 1)
+
+---
+
 ## Target keywords this project demonstrates
 
 `distributed systems` · `scalability` · `low latency` · `background workers` ·
@@ -113,16 +160,21 @@ user:{id}:followers  -> (optional) cached follower count
 ## Phase 0 — Project scaffolding
 **Goal:** a skeleton that boots, connects to Postgres + Redis, and returns `/healthz`.
 
-**Tasks**
-- Repo layout: `app/` (FastAPI), `worker/`, `frontend/`, `docker-compose.yml`, `.env`.
-- Docker Compose with `postgres` and `redis` services.
-- FastAPI app with config loading and a `/healthz` endpoint that pings DB + Redis.
-- DB migration tooling (Alembic) and the schema above.
-- README "how to run" + Makefile (`make up`, `make test`, `make bench`).
+**Status:** Core done (Postgres path). Redis / Alembic / README deferred — see deviations above.
+
+**Sub-phases** (each an independent, self-contained chunk)
+- **0.1 — Repo layout** — `backend/app/` (FastAPI), `frontend/`, `docker-compose.yml`, `.env`. **[FIXED]** (`worker/` arrives at 2.4.)
+- **0.2 — Docker Compose (Postgres)** — `postgres:16-alpine` with healthcheck + named volume. **[FIXED — Postgres only]**
+- **0.3 — Config + DB engine** — `config.py` (pydantic-settings, required `DATABASE_URL`) + `db.py` (async SQLAlchemy engine/session). **[FIXED]**
+- **0.4 — Health check** — `/healthz` pings Postgres and reports status. **[FIXED — Postgres only]** (Redis ping moves to 2.1.)
+- **0.5 — Secret hygiene & dev tooling** — real creds only in git-ignored `backend/.env`; root `.gitignore`; `.vscode` interpreter → venv. **[FIXED]**
+- **0.6 — Redis service** — add `redis` to compose + client + healthz ping. **[DEFERRED → 2.1]**
+- **0.7 — Alembic + schema** — migration tooling and the data-model tables. **[DEFERRED → 1.1]**
+- **0.8 — README + Makefile** — "how to run" + `make up/test/bench`. **[DEFERRED → Phase 8 / as needed]**
 
 **Definition of done**
-- `docker compose up` starts API + Postgres + Redis.
-- `GET /healthz` returns 200 with DB + Redis status.
+- **[FIXED — Postgres]** `docker compose up` starts Postgres. (API runs in the venv; Redis is added in Phase 2.)
+- **[FIXED — Postgres]** `GET /healthz` returns 200 with DB status — `{"status":"ok","postgres":"up"}`.
 
 **Keywords unlocked:** project hygiene only.
 
@@ -132,20 +184,22 @@ user:{id}:followers  -> (optional) cached follower count
 **Goal:** a fully working social feed with the *simplest correct* design — **no Redis
 timelines, no workers yet.** The home feed is built by querying Postgres directly.
 
+**Status:** Not started — next up (this is the immediate milestone).
+
 > Why naive first: this gives us a correct baseline to demo and to **benchmark**, so the
 > later optimizations have real before/after numbers. This "I started simple, measured,
 > then optimized" story is gold in interviews.
 
-**Tasks**
-- Users: create user, basic lookup. (Auth can be a simple API key / fake `X-User-Id`
-  header for now — real auth is not the point of this project.)
-- Follow / unfollow endpoints writing to the `follows` table.
-- Create post endpoint writing to `posts`.
-- **Home feed (`GET /feed`)** = SQL:
-  `SELECT posts of everyone current_user follows, ORDER BY id DESC, cursor paginated.`
-- User's own posts endpoint.
-- Minimal Next.js UI: login-as-user selector, compose box, feed list, follow button.
-- Seed script that creates N users, a follow graph, and some posts.
+**Sub-phases** (each an independent, self-contained chunk)
+- **1.1 — Schema + migrations** — SQLAlchemy models for `users`, `follows`, `posts` (per data model) + Alembic setup and the initial migration. _Done when:_ `alembic upgrade head` creates all three tables. _(This is the deferred 0.7.)_
+- **1.2 — App skeleton + fake auth** — routers package, `get_session` dependency, and a simple `X-User-Id` header dependency that resolves the "current user". _Done when:_ a route can read the caller's user id.
+- **1.3 — Users API** — `POST /users` (create) and `GET /users/{id}` (lookup) with Pydantic request/response schemas. _Done when:_ a user can be created and fetched.
+- **1.4 — Follow graph** — `POST /follow` and `DELETE /follow` writing/removing rows in `follows` (idempotent, no self-follow). _Done when:_ follow/unfollow persist correctly.
+- **1.5 — Posts API** — `POST /posts` (author = current user) and `GET /users/{id}/posts` (author timeline, newest first). _Done when:_ posting and reading a user's posts work.
+- **1.6 — Home feed (fan-out-on-read)** — `GET /feed`: SQL join of posts from everyone the current user follows, `ORDER BY id DESC`, **cursor** paginated (`?cursor=&limit=`). _Done when:_ feed is correct and pagination is stable.
+- **1.7 — Seed script** — generate N users, a random follow graph, and posts for local testing/benchmarking. _Done when:_ one command populates a demo dataset.
+- **1.8 — Frontend feed UI (Next.js)** — "login-as-user" selector, compose box, feed list, follow button, talking to the API. _Done when:_ the loop works in the browser.
+- **1.9 — Integration tests** — pytest + httpx covering users/follow/posts/feed happy paths. _Done when:_ `pytest` is green.
 
 **Definition of done**
 - I can: create users, follow people, post, and see a correct home feed in the browser.
@@ -164,18 +218,15 @@ follow graph, posting, and cursor-paginated home timeline."
 **Goal:** replace fan-out-on-read with **fan-out-on-write**: precompute each user's home
 timeline in Redis so feed reads are O(1) cache hits. Introduce the **queue + worker**.
 
-**Tasks**
-- Add Redis sorted set `timeline:{user_id}` (member = post_id, score = post_id).
-- On `POST /posts`: write to Postgres, then **enqueue a fan-out job** to a Redis Stream
-  instead of doing work inline.
-- New **worker process** (separate container): consumes the stream via a consumer group,
-  loads the author's followers, and pushes the new post_id into each follower's
-  `timeline:` ZSET (use Redis pipelining for the batch).
-- `GET /feed` now reads from `timeline:{current_user}` (ZREVRANGE) and hydrates post
-  bodies from Postgres (or a post cache).
-- Trim timelines to the latest ~800 entries (ZREMRANGEBYRANK) to bound memory.
-- **Cache-miss fallback:** if a timeline is empty/missing, rebuild it from Postgres
-  on the fly (keeps correctness while cache warms).
+**Status:** Not started. (Redis is first introduced here.)
+
+**Sub-phases** (each an independent, self-contained chunk)
+- **2.1 — Redis service + client** — add `redis` to compose, a shared async client, and the Redis ping in `/healthz` (the deferred 0.6). _Done when:_ `/healthz` reports `redis: up`.
+- **2.2 — Feed reads from Redis** — `GET /feed` reads `timeline:{current_user}` via `ZREVRANGE` and hydrates post bodies from Postgres. _Done when:_ feed reads skip the big SQL join on a cache hit.
+- **2.3 — Cache-miss fallback** — if a timeline is empty/missing, rebuild it from Postgres on the fly, then serve. _Done when:_ a cold user still gets a correct feed.
+- **2.4 — Fan-out worker process** — separate container; consumes `feed_stream` via a consumer group, loads the author's followers, pipelines `ZADD post_id` into each follower's `timeline:`. _Done when:_ the worker runs standalone and updates timelines.
+- **2.5 — Enqueue on write** — `POST /posts` writes to Postgres then `XADD` a `{post_id, author_id}` job to `feed_stream` (no inline fan-out). _Done when:_ posting enqueues a job the worker drains.
+- **2.6 — Timeline trimming** — cap each `timeline:` to ~800 entries via `ZREMRANGEBYRANK` to bound memory. _Done when:_ timelines stop growing unbounded.
 
 **Definition of done**
 - Posting a message causes it to appear in all followers' feeds within ~1s.
@@ -195,15 +246,13 @@ O(1) cache hits."
 **Goal:** solve the scalability flaw of pure fan-out-on-write: a user with millions of
 followers would trigger millions of writes per post. Switch to a **hybrid** model.
 
-**Tasks**
-- Define a "celebrity" threshold (e.g. > 10k followers) — store/lookup follower counts.
-- On post by a **normal** user → fan-out-on-write (Phase 2 behavior).
-- On post by a **celebrity** → **skip** fan-out; do nothing to follower timelines.
-- On `GET /feed` → merge two sources:
-  1. the precomputed `timeline:` ZSET (normal authors), plus
-  2. recent posts from the **celebrities this user follows**, fetched at read time,
-  3. merge-sort the two by time, paginate.
-- Cache each celebrity's recent posts in Redis so the read-time merge is cheap.
+**Status:** Not started.
+
+**Sub-phases** (each an independent, self-contained chunk)
+- **3.1 — Follower counts + threshold** — maintain/lookup a follower count per user and a configurable "celebrity" threshold (e.g. > 10k). _Done when:_ a user can be classified normal vs celebrity in O(1).
+- **3.2 — Skip fan-out for celebrities** — on a celebrity post, write to Postgres but do **not** fan out to follower timelines. _Done when:_ a celebrity post triggers zero timeline writes.
+- **3.3 — Cache celebrity recent posts** — keep each celebrity's recent posts in Redis for cheap read-time access. _Done when:_ recent celebrity posts are readable without a Postgres hit.
+- **3.4 — Read-time merge** — `GET /feed` merge-sorts the precomputed `timeline:` ZSET with recent posts from followed celebrities, by time, paginated. _Done when:_ a user following both kinds sees one correct, time-ordered feed.
 
 **Definition of done**
 - A celebrity posting does **not** cause a fan-out storm.
@@ -219,16 +268,16 @@ the classic Twitter timeline scalability problem."
 ## Phase 4 — Optimization & performance (make it fast, prove it)
 **Goal:** drive latency down and throughput up, with **measured before/after numbers**.
 
-**Tasks**
-- Cursor-based pagination everywhere (no OFFSET).
-- Redis pipelining / `MGET` for batch post hydration; consider a `post:{id}` cache.
-- Batch fan-out writes per follower chunk; tune worker concurrency and batch size.
-- DB indexing pass (`posts(author_id, id desc)`, `follows(follower_id)`), `EXPLAIN ANALYZE`.
-- Connection pooling (asyncpg pool, Redis pool) tuned.
-- Load test with a script (locust or custom asyncio) at increasing concurrency.
-- **Record metrics**: feed read p50/p95/p99, post-to-visible latency, throughput
-  (posts/sec, feeds/sec). Compare Phase 1 (read) vs Phase 2/3 (write) designs.
-- Put a results table + chart in the README.
+**Status:** Not started.
+
+**Sub-phases** (each an independent, self-contained chunk)
+- **4.1 — Cursor pagination audit** — ensure every list endpoint uses keyset cursors, never `OFFSET`. _Done when:_ no `OFFSET` remains on hot paths.
+- **4.2 — Batch hydration + post cache** — hydrate posts via `MGET`/pipelining and add a `post:{id}` cache. _Done when:_ feed hydration is one round-trip per page.
+- **4.3 — Worker batching + concurrency** — batch fan-out per follower chunk; tune worker concurrency and batch size. _Done when:_ fan-out throughput improves measurably.
+- **4.4 — DB indexing pass** — add `posts(author_id, id desc)`, `follows(follower_id)`; verify with `EXPLAIN ANALYZE`. _Done when:_ key queries use index scans.
+- **4.5 — Connection pooling** — tune asyncpg and Redis pool sizes for target concurrency. _Done when:_ pools are sized and stable under load.
+- **4.6 — Load-test harness** — locust or custom asyncio driver at increasing concurrency. _Done when:_ a repeatable load test exists.
+- **4.7 — Benchmark + record** — capture feed-read p50/p95/p99, post-to-visible latency, throughput; before/after vs Phase 1; table + chart in README. _Done when:_ numbers are documented.
 
 **Definition of done**
 - Documented numbers, e.g. "feed read p99 < 100 ms at X RPS", "post-to-feed < 1s".
@@ -244,16 +293,15 @@ N feed reads/sec under load."
 ## Phase 5 — Fault tolerance & reliability
 **Goal:** guarantee no lost posts and graceful recovery from failures.
 
-**Tasks**
-- Worker: at-least-once processing with Redis Streams consumer-group acks; reclaim
-  pending (unacked) messages from dead workers (`XAUTOCLAIM`).
-- Retries with exponential backoff; a **dead-letter stream** for poison jobs.
-- Idempotent fan-out (re-processing a job must not duplicate timeline entries — ZADD by
-  post_id is naturally idempotent; verify).
-- Timeline rebuild path: if Redis is flushed/unavailable, feeds fall back to Postgres and
-  rebuild caches (degraded but correct).
-- Graceful shutdown (drain in-flight jobs, ack before exit).
-- Chaos test: kill a worker mid-fan-out and assert no post is lost or duplicated.
+**Status:** Not started.
+
+**Sub-phases** (each an independent, self-contained chunk)
+- **5.1 — At-least-once + reclaim** — consumer-group acks; reclaim pending (unacked) messages from dead workers via `XAUTOCLAIM`. _Done when:_ a crashed worker's jobs get picked up.
+- **5.2 — Retries + dead-letter** — exponential-backoff retries and a dead-letter stream for poison jobs. _Done when:_ a bad job is retried then parked, not lost.
+- **5.3 — Idempotent fan-out** — verify re-processing a job can't duplicate timeline entries (`ZADD` by post_id is idempotent). _Done when:_ replaying a job is a no-op.
+- **5.4 — Redis-down degradation** — if Redis is unavailable/flushed, feeds fall back to Postgres and rebuild caches. _Done when:_ a Redis outage degrades but doesn't error.
+- **5.5 — Graceful shutdown** — drain in-flight jobs and ack before exit. _Done when:_ SIGTERM loses no in-flight work.
+- **5.6 — Chaos test** — kill a worker mid-fan-out; assert zero lost/duplicated posts. _Done when:_ the chaos test passes.
 
 **Definition of done**
 - Killing a worker mid-job loses zero posts and creates zero duplicates.
@@ -269,12 +317,13 @@ under worker-kill chaos tests."
 ## Phase 6 — Observability
 **Goal:** make the system measurable and debuggable like a production service.
 
-**Tasks**
-- Prometheus client: request latency histograms, feed read latency, fan-out lag
-  (post-created → timeline-updated), queue depth, worker throughput, cache hit ratio.
-- `/metrics` endpoint on API and worker.
-- Grafana dashboard (pre-provisioned via Docker Compose) with the key panels.
-- Structured JSON logging with request IDs.
+**Status:** Not started.
+
+**Sub-phases** (each an independent, self-contained chunk)
+- **6.1 — API metrics** — Prometheus client + `/metrics` on the API: request/feed-read latency histograms, cache hit ratio. _Done when:_ the API exposes scrapeable metrics.
+- **6.2 — Worker metrics** — `/metrics` on the worker: fan-out lag (post-created → timeline-updated), queue depth, throughput. _Done when:_ the worker exposes scrapeable metrics.
+- **6.3 — Grafana dashboard** — Prometheus + Grafana pre-provisioned via compose, with the key panels. _Done when:_ `docker compose up` brings up a working dashboard.
+- **6.4 — Structured logging** — JSON logs with request IDs across API and worker. _Done when:_ a request can be traced end-to-end by id.
 
 **Definition of done**
 - `docker compose up` brings up Grafana with a working dashboard.
@@ -289,13 +338,13 @@ latency, fan-out lag, queue depth, cache hit ratio), cutting issue diagnosis to 
 ## Phase 7 — Packaging, microservices split & deployment
 **Goal:** present it as a clean, multi-service, reproducible system.
 
-**Tasks**
-- Clear service boundaries: `api`, `fanout-worker`, `frontend`, plus `postgres`, `redis`,
-  `prometheus`, `grafana` — all in one Docker Compose.
-- Independent scaling note: `docker compose up --scale fanout-worker=4`.
-- GitHub Actions CI: lint (ruff) + type-check (mypy/pyright) + pytest on every push.
-- Optional stretch: Kubernetes manifests / Helm chart; deploy a live demo (frontend on
-  Vercel, backend on a small VM or Fly.io/Render).
+**Status:** Not started.
+
+**Sub-phases** (each an independent, self-contained chunk)
+- **7.1 — Service split in compose** — clean boundaries for `api`, `fanout-worker`, `frontend`, `postgres`, `redis`, `prometheus`, `grafana` in one compose file. _Done when:_ one command runs the whole stack.
+- **7.2 — Horizontal worker scaling** — verify `docker compose up --scale fanout-worker=4` works. _Done when:_ workers scale out without duplicate processing.
+- **7.3 — CI pipeline** — GitHub Actions: ruff lint + type-check (mypy/pyright) + pytest on every push. _Done when:_ CI is green on the repo.
+- **7.4 — Deploy (stretch)** — Kubernetes/Helm manifests; live demo (frontend on Vercel, backend on a small VM / Fly.io / Render). _Done when:_ a public demo is reachable.
 
 **Definition of done**
 - One command runs the whole system; workers scale horizontally.
@@ -308,14 +357,13 @@ latency, fan-out lag, queue depth, cache hit ratio), cutting issue diagnosis to 
 ## Phase 8 — Documentation & résumé assets
 **Goal:** turn the working system into something that actually lands interviews.
 
-**Tasks**
-- `README.md`: what it is, architecture diagram, how to run, **benchmark results + chart**.
-- `DESIGN.md`: 4–6 key decisions and the alternatives rejected — fan-out-on-read vs
-  -on-write vs hybrid, why Redis sorted sets, why Redis Streams over Celery, consistency
-  tradeoffs, celebrity threshold tuning.
-- One **blog post** on an interesting subproblem (the celebrity fan-out, or the
-  at-least-once worker), to share for visibility/referrals.
-- Finalize 3–4 résumé bullets with real measured numbers.
+**Status:** Not started.
+
+**Sub-phases** (each an independent, self-contained chunk)
+- **8.1 — README** — what it is, architecture diagram, how to run, benchmark results + chart. _Done when:_ a stranger can clone and run it.
+- **8.2 — DESIGN.md** — 4–6 key decisions and rejected alternatives (fan-out read vs write vs hybrid, why Redis sorted sets, Redis Streams vs Celery, consistency tradeoffs, celebrity threshold). _Done when:_ the tradeoffs are written up.
+- **8.3 — Blog post** — one interesting subproblem (celebrity fan-out or the at-least-once worker). _Done when:_ published/shareable.
+- **8.4 — Résumé bullets** — finalize 3–4 bullets with real measured numbers. _Done when:_ bullets cite actual benchmarks.
 
 **Definition of done**
 - A stranger can clone the repo, run it, read the design doc, and understand the tradeoffs.

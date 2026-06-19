@@ -1,8 +1,9 @@
 # Social Feed Service — Implementation Plan
 
 A "mini Twitter/X timeline": users post, followers see those posts in a home feed that
-loads fast even when someone has millions of followers. The backend is the star; the
-frontend is a thin feed UI.
+loads fast even when someone has millions of followers. The backend is the star, but it is
+also a **real, usable product**: users register and log in (real JWT auth), and a lightweight
+Next.js UI lets them post, follow, and read their feed.
 
 This plan is **iterative on purpose**. We first build a *correct but naive* product
 (Phase 1), then we measure it and progressively replace the slow parts with the
@@ -17,12 +18,12 @@ demoable system — never a half-broken one.
 
 ## Implementation status (live tracker)
 
-> Updated: 2026-06-18 — Legend: **Done** / **In progress** / **Not started** / **Deferred**
+> Updated: 2026-06-19 — Legend: **Done** / **In progress** / **Not started** / **Deferred**
 
 | Phase | Status | Notes |
 |---|---|---|
 | 0 — Scaffolding | In progress (core done) | Postgres + `/healthz` live; Redis/Alembic/README deferred until needed |
-| 1 — MVP (fan-out-on-read) | Not started | Next up |
+| 1 — MVP + auth (fan-out-on-read) | In progress | 1.1 schema + migrations done; auth + features next |
 | 2 — Redis timelines + workers | Not started | Redis is introduced here, not in Phase 0 |
 | 3 — Celebrity hybrid | Not started | |
 | 4 — Optimization + benchmarks | Not started | |
@@ -38,6 +39,9 @@ demoable system — never a half-broken one.
   tables are actually needed.
 - Dev model: the **API runs in a local venv**; **Postgres runs in Docker**. Containerising the
   API itself is a Phase 7 packaging concern.
+- **Real auth promoted into Phase 1** (was a Phase 8 stretch). The app is a usable, user-facing
+  product: `current_user` validates a **JWT bearer token** (bcrypt-hashed passwords); the fake
+  `X-User-Id` placeholder is dropped.
 
 ### Phase 0 checklist
 - [x] Repo layout (`backend/app`, `frontend/`, `docker-compose.yml`, `.env`)
@@ -46,7 +50,7 @@ demoable system — never a half-broken one.
 - [x] Secret hygiene — real creds only in git-ignored `backend/.env`; committed files use placeholders
 - [x] Root `.gitignore` (Python) + `.vscode/settings.json` pointing at the venv interpreter
 - [ ] Redis service — **deferred to Phase 2**
-- [ ] Alembic migrations + schema — **deferred to Phase 1 start**
+- [x] Alembic migrations + schema — **done in Phase 1.1**
 - [ ] README "how to run" + Makefile — **deferred**
 
 **Phase 0 Definition of Done:** `docker compose up` starts Postgres — done; `GET /healthz`
@@ -56,7 +60,9 @@ returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the Do
 - `backend/app/main.py` — FastAPI app; `/healthz` pings Postgres; lifespan disposes the engine
 - `backend/app/config.py` — pydantic-settings; `database_url` is **required** (no fallback), loaded from `.env`
 - `backend/app/db.py` — async SQLAlchemy engine + `async_sessionmaker` + `get_session()` dependency
-- `backend/requirements.txt` — fastapi, uvicorn[standard], sqlalchemy[asyncio], asyncpg, pydantic-settings
+- `backend/app/models.py` — SQLAlchemy models (`Base`): `users`, `follows`, `posts`
+- `backend/alembic/` + `alembic.ini` — Alembic (async); initial migration `dcfce07fa8f2_initial_schema` creates all three tables (URL injected from `.env`)
+- `backend/requirements.txt` — fastapi, uvicorn[standard], sqlalchemy[asyncio], asyncpg, pydantic-settings, alembic
 - `docker-compose.yml` — `postgres:16-alpine`, `env_file: backend/.env`, healthcheck
 - `frontend/` — default Next.js scaffold (untouched; the feed UI is built in Phase 1)
 
@@ -77,11 +83,12 @@ Each phase below notes which keywords it unlocks and the résumé bullet it earn
 | Layer | Choice | Notes |
 |---|---|---|
 | Web API | **FastAPI** (async) | low-latency, OpenAPI docs, async Redis/DB calls |
+| Auth | **JWT bearer** + bcrypt hashing | real register/login; isolated behind `current_user` |
 | Source of truth | **PostgreSQL** | users, follow graph, posts |
 | Cache / timelines | **Redis** (sorted sets) | per-user home timelines |
 | Queue | **Redis Streams** | fan-out jobs (consumer groups) |
 | Background workers | **Custom async worker** | the fan-out engine (separate process) |
-| Frontend | **Next.js** | thin feed UI |
+| Frontend | **Next.js** | feed UI + auth screens (lightweight but usable) |
 | Local infra | **Docker Compose** | one-command full stack |
 | Tests | **pytest + httpx** | unit + integration |
 | Observability | **Prometheus + Grafana** | added in a later phase |
@@ -107,6 +114,70 @@ We do **not** build all of this at once. We arrive here by the end of Phase 6.
 
 ---
 
+## Project structure (folder layout)
+
+A conventional, layered FastAPI layout that grows with the phases. Items marked **[Pn]** are
+introduced in that phase; everything else exists today. We create each folder **only when its
+phase needs it** — no empty scaffolding up front.
+
+```text
+ripple/
+├─ docker-compose.yml             # local infra (Postgres now; Redis + others later)
+├─ .gitignore   .vscode/          # Python ignores + venv interpreter setting
+├─ context/PLAN.md                # this plan / live tracker
+├─ frontend/                      # Next.js feed UI + auth screens             [built in 1.9]
+└─ backend/
+   ├─ .env  .env.example          # real secrets (git-ignored) + placeholder template
+   ├─ requirements.txt
+   ├─ alembic.ini   alembic/      # migrations; env.py injects URL from .env
+   │  └─ versions/                # migration scripts (dcfce07fa8f2 = initial schema)
+   ├─ app/
+   │  ├─ main.py                  # FastAPI app: lifespan, router includes, /healthz
+   │  ├─ config.py                # pydantic-settings (DATABASE_URL, ...)
+   │  ├─ db.py                    # async engine + session + get_session dependency
+   │  ├─ models.py                # SQLAlchemy ORM models (users/follows/posts)
+   │  ├─ deps.py                  # shared deps: current_user via JWT bearer token  [1.2]
+   │  ├─ security.py              # bcrypt password hashing + JWT encode/decode      [1.2]
+   │  ├─ schemas/                 # Pydantic request/response DTOs              [1.2+]
+   │  │   └─ auth.py  user.py  follow.py  post.py  feed.py
+   │  ├─ routers/                 # thin HTTP layer, one module per resource    [1.2+]
+   │  │   └─ auth.py  users.py  follows.py  posts.py  feed.py
+   │  ├─ services/                # business logic / DB queries (feed assembly) [1.3+]
+   │  │   └─ auth.py  users.py  follows.py  posts.py  feed.py
+   │  └─ redis_client.py          # shared async Redis client                   [2.1]
+   ├─ worker/                     # fan-out worker (separate process)           [2.4]
+   │   └─ main.py
+   ├─ scripts/
+   │   └─ seed.py                 # demo data generator                         [1.7]
+   └─ tests/                      # pytest + httpx integration tests            [1.9]
+```
+
+### Layered request flow
+
+```text
+HTTP request → router (validate via schema) → service (business logic) → model/ORM → Postgres
+                                                                       ↘ response ← schema
+```
+
+Keeping these layers separate is the whole point: later phases can swap the feed's data source
+(Postgres join → Redis timelines) by changing only the **service** layer, leaving routers and
+schemas untouched.
+
+- **routers/** — URL + verb wiring, status codes, dependency injection; no SQL.
+- **schemas/** — request validation + response shape (decoupled from ORM models).
+- **services/** — the actual work: queries, follow-graph writes, feed assembly, later fan-out + cache reads.
+- **models.py** — SQLAlchemy tables; the source of truth for Alembic migrations.
+- **deps.py** — cross-cutting dependencies (DB session, current user, later the Redis client).
+- **worker/** + **redis_client.py** — the async infrastructure introduced from Phase 2 on.
+
+### Current vs target
+Today the backend is intentionally minimal: `app/{main,config,db,models}.py` + `alembic/`.
+The auth foundation (`deps.py`, `security.py`), `schemas/`, `routers/`, and `services/` layers
+land across **1.2–1.7**; `scripts/`, `tests/`, `worker/`, and `redis_client.py` follow in their
+marked phases.
+
+---
+
 ## Data model (Postgres)
 
 ```text
@@ -114,6 +185,7 @@ users
   id            BIGSERIAL PK
   username      TEXT UNIQUE NOT NULL
   display_name  TEXT
+  password_hash TEXT NOT NULL              -- bcrypt; added by the auth migration (1.2)
   created_at    TIMESTAMPTZ DEFAULT now()
 
 follows
@@ -144,7 +216,9 @@ user:{id}:followers  -> (optional) cached follower count
 
 | Method | Path | Phase | Purpose |
 |---|---|---|---|
-| POST | `/users` | 1 | create a user |
+| POST | `/auth/register` | 1 | register (create account) |
+| POST | `/auth/login` | 1 | log in, returns a JWT |
+| GET | `/users/me` | 1 | current authenticated user |
 | POST | `/follow` | 1 | follow a user |
 | DELETE | `/follow` | 1 | unfollow |
 | POST | `/posts` | 1 | create a post |
@@ -184,33 +258,34 @@ user:{id}:followers  -> (optional) cached follower count
 **Goal:** a fully working social feed with the *simplest correct* design — **no Redis
 timelines, no workers yet.** The home feed is built by querying Postgres directly.
 
-**Status:** Not started — next up (this is the immediate milestone).
+**Status:** In progress — 1.1 (schema + migrations) done; 1.2 (auth foundation) next.
 
 > Why naive first: this gives us a correct baseline to demo and to **benchmark**, so the
 > later optimizations have real before/after numbers. This "I started simple, measured,
 > then optimized" story is gold in interviews.
 
 **Sub-phases** (each an independent, self-contained chunk)
-- **1.1 — Schema + migrations** — SQLAlchemy models for `users`, `follows`, `posts` (per data model) + Alembic setup and the initial migration. _Done when:_ `alembic upgrade head` creates all three tables. _(This is the deferred 0.7.)_
-- **1.2 — App skeleton + fake auth** — routers package, `get_session` dependency, and a simple `X-User-Id` header dependency that resolves the "current user". _Done when:_ a route can read the caller's user id.
-- **1.3 — Users API** — `POST /users` (create) and `GET /users/{id}` (lookup) with Pydantic request/response schemas. _Done when:_ a user can be created and fetched.
-- **1.4 — Follow graph** — `POST /follow` and `DELETE /follow` writing/removing rows in `follows` (idempotent, no self-follow). _Done when:_ follow/unfollow persist correctly.
-- **1.5 — Posts API** — `POST /posts` (author = current user) and `GET /users/{id}/posts` (author timeline, newest first). _Done when:_ posting and reading a user's posts work.
-- **1.6 — Home feed (fan-out-on-read)** — `GET /feed`: SQL join of posts from everyone the current user follows, `ORDER BY id DESC`, **cursor** paginated (`?cursor=&limit=`). _Done when:_ feed is correct and pagination is stable.
-- **1.7 — Seed script** — generate N users, a random follow graph, and posts for local testing/benchmarking. _Done when:_ one command populates a demo dataset.
-- **1.8 — Frontend feed UI (Next.js)** — "login-as-user" selector, compose box, feed list, follow button, talking to the API. _Done when:_ the loop works in the browser.
-- **1.9 — Integration tests** — pytest + httpx covering users/follow/posts/feed happy paths. _Done when:_ `pytest` is green.
+- **1.1 — Schema + migrations** — SQLAlchemy models for `users`, `follows`, `posts` (per data model) + Alembic setup and the initial migration. _Done when:_ `alembic upgrade head` creates all three tables. _(This is the deferred 0.7.)_ **[DONE]**
+- **1.2 — Auth foundation + app skeleton** — routers package, `get_session` dependency, `security.py` (bcrypt hashing + JWT encode/decode), a migration adding `users.password_hash`, and the `current_user` dependency that validates a **JWT bearer token**. _Done when:_ a protected route resolves the caller from a valid token (401 otherwise).
+- **1.3 — Auth API** — `POST /auth/register` (create account, hash password), `POST /auth/login` (verify password, return a JWT), `GET /users/me`. _Done when:_ a user can register, log in, and call a protected route with the token.
+- **1.4 — Users lookup** — `GET /users/{id}` (public profile) with Pydantic schemas. _Done when:_ a profile can be fetched.
+- **1.5 — Follow graph** — `POST /follow` and `DELETE /follow` writing/removing rows in `follows` (idempotent, no self-follow; actor = current user). _Done when:_ follow/unfollow persist correctly.
+- **1.6 — Posts API** — `POST /posts` (author = current user) and `GET /users/{id}/posts` (author timeline, newest first). _Done when:_ posting and reading a user's posts work.
+- **1.7 — Home feed (fan-out-on-read)** — `GET /feed`: SQL join of posts from everyone the current user follows, `ORDER BY id DESC`, **cursor** paginated (`?cursor=&limit=`). _Done when:_ feed is correct and pagination is stable.
+- **1.8 — Seed script** — generate N users (with passwords), a random follow graph, and posts for local testing/benchmarking. _Done when:_ one command populates a demo dataset.
+- **1.9 — Frontend UI (Next.js)** — register/login screens, then compose box, feed list, follow button — lightweight but usable, authenticating with the JWT. _Done when:_ the full loop works in the browser.
+- **1.10 — Integration tests** — pytest + httpx covering auth + users/follow/posts/feed happy paths. _Done when:_ `pytest` is green.
 
 **Definition of done**
-- I can: create users, follow people, post, and see a correct home feed in the browser.
+- I can: register, log in, follow people, post, and see a correct home feed in the browser.
 - Cursor pagination works.
 - Everything runs via Docker Compose.
 
 **This is the most important milestone — the product is real.**
 
-**Keywords unlocked:** `REST API`, `PostgreSQL`, basic backend.
-**Résumé bullet (draft):** "Built a social feed service (FastAPI + PostgreSQL) with
-follow graph, posting, and cursor-paginated home timeline."
+**Keywords unlocked:** `REST API`, `PostgreSQL`, `auth (JWT)`, basic backend.
+**Résumé bullet (draft):** "Built a social feed service (FastAPI + PostgreSQL) with JWT auth,
+a follow graph, posting, and a cursor-paginated home timeline."
 
 ---
 
@@ -392,7 +467,7 @@ flowchart TD
 - **Through Phase 8**: genuinely interview-defensible, FAANG-tier portfolio material.
 
 ## Stretch goals (only after Phase 8)
-- Real auth (JWT), rate limiting per user.
+- OAuth / social login, email + password reset, rate limiting per user.
 - Likes / counters (Redis), trending posts.
 - WebSocket live feed updates (Redis pub/sub).
 - Read replicas / sharding the timeline cache across Redis nodes.

@@ -23,7 +23,7 @@ demoable system — never a half-broken one.
 | Phase | Status | Notes |
 |---|---|---|
 | 0 — Scaffolding | In progress (core done) | Postgres + `/healthz` live; Redis/Alembic/README deferred until needed |
-| 1 — MVP + auth (fan-out-on-read) | In progress | 1.1 schema + migrations done; auth + features next |
+| 1 — MVP + auth (fan-out-on-read) | In progress | 1.1–1.2 done (auth foundation + `/users/me`); 1.3 next |
 | 2 — Redis timelines + workers | Not started | Redis is introduced here, not in Phase 0 |
 | 3 — Celebrity hybrid | Not started | |
 | 4 — Optimization + benchmarks | Not started | |
@@ -57,12 +57,16 @@ demoable system — never a half-broken one.
 returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the DoD moves to Phase 2.)
 
 ### Current state snapshot (files)
-- `backend/app/main.py` — FastAPI app; `/healthz` pings Postgres; lifespan disposes the engine
-- `backend/app/config.py` — pydantic-settings; `database_url` is **required** (no fallback), loaded from `.env`
+- `backend/app/main.py` — FastAPI app; `/healthz` pings Postgres; includes the `users` router; lifespan disposes the engine
+- `backend/app/config.py` — pydantic-settings; required `DATABASE_URL` + `JWT_SECRET_KEY` (+ `jwt_algorithm`, `access_token_expire_minutes`)
 - `backend/app/db.py` — async SQLAlchemy engine + `async_sessionmaker` + `get_session()` dependency
-- `backend/app/models.py` — SQLAlchemy models (`Base`): `users`, `follows`, `posts`
-- `backend/alembic/` + `alembic.ini` — Alembic (async); initial migration `dcfce07fa8f2_initial_schema` creates all three tables (URL injected from `.env`)
-- `backend/requirements.txt` — fastapi, uvicorn[standard], sqlalchemy[asyncio], asyncpg, pydantic-settings, alembic
+- `backend/app/models.py` — SQLAlchemy models (`Base`): `users` (+ `password_hash`), `follows`, `posts`
+- `backend/app/security.py` — bcrypt password hashing + JWT encode/decode
+- `backend/app/deps.py` — `current_user` dependency (validates the JWT bearer token)
+- `backend/app/schemas/user.py` — `UserOut` response DTO
+- `backend/app/routers/users.py` — protected `GET /users/me`
+- `backend/alembic/` + `alembic.ini` — Alembic (async); migrations: `dcfce07fa8f2` (initial schema), `30f2d801d8cb` (add `users.password_hash`)
+- `backend/requirements.txt` — fastapi, uvicorn[standard], sqlalchemy[asyncio], asyncpg, pydantic-settings, alembic, bcrypt, pyjwt
 - `docker-compose.yml` — `postgres:16-alpine`, `env_file: backend/.env`, healthcheck
 - `frontend/` — default Next.js scaffold (untouched; the feed UI is built in Phase 1)
 
@@ -258,7 +262,7 @@ user:{id}:followers  -> (optional) cached follower count
 **Goal:** a fully working social feed with the *simplest correct* design — **no Redis
 timelines, no workers yet.** The home feed is built by querying Postgres directly.
 
-**Status:** In progress — 1.1 (schema + migrations) done; 1.2 (auth foundation) next.
+**Status:** In progress — 1.1–1.2 done (schema, auth foundation, protected `/users/me`); 1.3 (auth API) next.
 
 > Why naive first: this gives us a correct baseline to demo and to **benchmark**, so the
 > later optimizations have real before/after numbers. This "I started simple, measured,
@@ -266,8 +270,8 @@ timelines, no workers yet.** The home feed is built by querying Postgres directl
 
 **Sub-phases** (each an independent, self-contained chunk)
 - **1.1 — Schema + migrations** — SQLAlchemy models for `users`, `follows`, `posts` (per data model) + Alembic setup and the initial migration. _Done when:_ `alembic upgrade head` creates all three tables. _(This is the deferred 0.7.)_ **[DONE]**
-- **1.2 — Auth foundation + app skeleton** — routers package, `get_session` dependency, `security.py` (bcrypt hashing + JWT encode/decode), a migration adding `users.password_hash`, and the `current_user` dependency that validates a **JWT bearer token**. _Done when:_ a protected route resolves the caller from a valid token (401 otherwise).
-- **1.3 — Auth API** — `POST /auth/register` (create account, hash password), `POST /auth/login` (verify password, return a JWT), `GET /users/me`. _Done when:_ a user can register, log in, and call a protected route with the token.
+- **1.2 — Auth foundation + app skeleton** — routers package, `get_session` dependency, `security.py` (bcrypt hashing + JWT encode/decode), a migration adding `users.password_hash`, and the `current_user` dependency that validates a **JWT bearer token**. _Done when:_ a protected route resolves the caller from a valid token (401 otherwise). _(Delivered: `security.py`, `deps.current_user`, `schemas/user.py`, `routers/users.py` with protected `GET /users/me`, migration `30f2d801d8cb`.)_ **[DONE]**
+- **1.3 — Auth API** — `POST /auth/register` (create account, hash password) and `POST /auth/login` (verify password, return a JWT). (`GET /users/me` already wired in 1.2.) _Done when:_ a user can register, log in, and call `/users/me` with the returned token.
 - **1.4 — Users lookup** — `GET /users/{id}` (public profile) with Pydantic schemas. _Done when:_ a profile can be fetched.
 - **1.5 — Follow graph** — `POST /follow` and `DELETE /follow` writing/removing rows in `follows` (idempotent, no self-follow; actor = current user). _Done when:_ follow/unfollow persist correctly.
 - **1.6 — Posts API** — `POST /posts` (author = current user) and `GET /users/{id}/posts` (author timeline, newest first). _Done when:_ posting and reading a user's posts work.

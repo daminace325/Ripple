@@ -5,6 +5,7 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.db import engine
+from app.routers import users
 
 
 @asynccontextmanager
@@ -14,6 +15,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+
+app.include_router(users.router)
 
 
 @app.get("/healthz")

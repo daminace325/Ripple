@@ -4,3 +4,5 @@ sqlalchemy[asyncio]
 asyncpg
 pydantic-settings
 alembic
+bcrypt
+pyjwt

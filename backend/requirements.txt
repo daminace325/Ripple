@@ -6,3 +6,4 @@ pydantic-settings
 alembic
 bcrypt
 pyjwt
+email-validator

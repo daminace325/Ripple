@@ -5,7 +5,7 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.db import engine
-from app.routers import auth, follows, users
+from app.routers import auth, follows, posts, users
 
 
 @asynccontextmanager
@@ -19,6 +19,7 @@ app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(follows.router)
+app.include_router(posts.router)
 
 
 @app.get("/healthz")

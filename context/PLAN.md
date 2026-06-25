@@ -23,7 +23,7 @@ demoable system — never a half-broken one.
 | Phase | Status | Notes |
 |---|---|---|
 | 0 — Scaffolding | In progress (core done) | Postgres + `/healthz` live; Redis/Alembic/README deferred until needed |
-| 1 — MVP + auth (fan-out-on-read) | In progress | 1.1–1.6 done (auth, profiles, follow graph, posts); 1.7 (feed) next |
+| 1 — MVP + auth (fan-out-on-read) | In progress | 1.1–1.7 done (auth, profiles, follow, posts, feed); 1.8 (seed) next |
 | 2 — Redis timelines + workers | Not started | Redis is introduced here, not in Phase 0 |
 | 3 — Celebrity hybrid | Not started | |
 | 4 — Optimization + benchmarks | Not started | |
@@ -70,7 +70,8 @@ returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the Do
 - `backend/app/services/users.py` — `get_user_by_id` (public profile lookup)
 - `backend/app/services/follows.py` — follow/unfollow (idempotent, race-safe upsert)
 - `backend/app/services/posts.py` — create post, list a user's posts (newest-first)
-- `backend/app/routers/auth.py` — `POST /auth/register`, `POST /auth/login` (email); `backend/app/routers/users.py` — `GET /users/me`, `PATCH /users/me`, `GET /users/{id}`; `backend/app/routers/follows.py` — `POST`/`DELETE /follow`; `backend/app/routers/posts.py` — `POST /posts`, `GET /users/{id}/posts`
+- `backend/app/services/feed.py` — home feed query (own + followees, keyset cursor)
+- `backend/app/routers/auth.py` — `POST /auth/register`, `POST /auth/login` (email); `backend/app/routers/users.py` — `GET /users/me`, `PATCH /users/me`, `GET /users/{id}`; `backend/app/routers/follows.py` — `POST`/`DELETE /follow`; `backend/app/routers/posts.py` — `POST /posts`, `GET /users/{id}/posts`; `backend/app/routers/feed.py` — `GET /feed`
 - `backend/alembic/` + `alembic.ini` — Alembic (async); migrations: `dcfce07fa8f2` (schema), `30f2d801d8cb` (password_hash), `53dcc349a3d9` (email + nullable username)
 - `backend/requirements.txt` — fastapi, uvicorn[standard], sqlalchemy[asyncio], asyncpg, pydantic-settings, alembic, bcrypt, pyjwt, email-validator
 - `docker-compose.yml` — `postgres:16-alpine`, `env_file: backend/.env`, healthcheck
@@ -270,7 +271,7 @@ user:{id}:followers  -> (optional) cached follower count
 **Goal:** a fully working social feed with the *simplest correct* design — **no Redis
 timelines, no workers yet.** The home feed is built by querying Postgres directly.
 
-**Status:** In progress — 1.1–1.6 done (schema, auth, profiles, follow graph, posts); 1.7 (home feed) next.
+**Status:** In progress — 1.1–1.7 done (schema, auth, profiles, follow, posts, home feed); 1.8 (seed script) next.
 
 > Why naive first: this gives us a correct baseline to demo and to **benchmark**, so the
 > later optimizations have real before/after numbers. This "I started simple, measured,
@@ -283,7 +284,7 @@ timelines, no workers yet.** The home feed is built by querying Postgres directl
 - **1.4 — Users lookup** — `GET /users/{id}` (public profile) with Pydantic schemas. _Done when:_ a profile can be fetched. _(Delivered: `services/users.py` `get_user_by_id`, `routers/users.py` `GET /{id}` → `UserOut` (email hidden), 404 when missing; `/me` keeps precedence.)_ **[DONE]**
 - **1.5 — Follow graph** — `POST /follow` and `DELETE /follow` writing/removing rows in `follows` (idempotent, no self-follow; actor = current user). _Done when:_ follow/unfollow persist correctly. _(Delivered: `schemas/follow.py`, `services/follows.py` (race-safe `ON CONFLICT DO NOTHING`), `routers/follows.py`; 400 self-follow, 404 missing target, idempotent.)_ **[DONE]**
 - **1.6 — Posts API** — `POST /posts` (author = current user) and `GET /users/{id}/posts` (author timeline, newest first). _Done when:_ posting and reading a user's posts work. _(Delivered: `schemas/post.py` (content 1–280), `services/posts.py`, `routers/posts.py`; 201 create, newest-first list, 404 missing author, 401 unauth, 422 empty.)_ **[DONE]**
-- **1.7 — Home feed (fan-out-on-read)** — `GET /feed`: SQL join of posts from everyone the current user follows, `ORDER BY id DESC`, **cursor** paginated (`?cursor=&limit=`). _Done when:_ feed is correct and pagination is stable.
+- **1.7 — Home feed (fan-out-on-read)** — `GET /feed`: SQL query of posts from everyone the current user follows **plus their own posts**, `ORDER BY id DESC`, **cursor** paginated (`?cursor=&limit=`). _Done when:_ feed is correct and pagination is stable. _(Delivered: `services/feed.py` (own + followees via subquery, keyset cursor `id < cursor`), `schemas/feed.py` (`FeedPage{items,next_cursor}`), `routers/feed.py`; excludes non-followed authors; 401 unauth.)_ **[DONE]**
 - **1.8 — Seed script** — generate N users (with passwords), a random follow graph, and posts for local testing/benchmarking. _Done when:_ one command populates a demo dataset.
 - **1.9 — Frontend UI (Next.js)** — register/login screens, then compose box, feed list, follow button — lightweight but usable, authenticating with the JWT. _Done when:_ the full loop works in the browser.
 - **1.10 — Integration tests** — pytest + httpx covering auth + users/follow/posts/feed happy paths. _Done when:_ `pytest` is green.

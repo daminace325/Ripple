@@ -5,7 +5,7 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.db import engine
-from app.routers import auth, follows, posts, users
+from app.routers import auth, feed, follows, posts, users
 
 
 @asynccontextmanager
@@ -20,6 +20,7 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(follows.router)
 app.include_router(posts.router)
+app.include_router(feed.router)
 
 
 @app.get("/healthz")

@@ -6,8 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.deps import get_current_user
 from app.models import User
-from app.schemas.user import MeOut, ProfileUpdate
+from app.schemas.user import MeOut, ProfileUpdate, UserOut
 from app.services import auth as auth_service
+from app.services import users as users_service
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -37,3 +38,16 @@ async def update_current_user(
         username=payload.username,
         display_name=payload.display_name,
     )
+
+
+@router.get("/{user_id}", response_model=UserOut)
+async def read_user(
+    user_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> User:
+    user = await users_service.get_user_by_id(session, user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        )
+    return user

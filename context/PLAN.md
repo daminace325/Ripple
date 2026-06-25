@@ -23,7 +23,7 @@ demoable system — never a half-broken one.
 | Phase | Status | Notes |
 |---|---|---|
 | 0 — Scaffolding | In progress (core done) | Postgres + `/healthz` live; Redis/Alembic/README deferred until needed |
-| 1 — MVP + auth (fan-out-on-read) | In progress | 1.1–1.4 done (auth + public profile lookup); 1.5 next |
+| 1 — MVP + auth (fan-out-on-read) | In progress | 1.1–1.5 done (auth, profiles, follow graph); 1.6 next |
 | 2 — Redis timelines + workers | Not started | Redis is introduced here, not in Phase 0 |
 | 3 — Celebrity hybrid | Not started | |
 | 4 — Optimization + benchmarks | Not started | |
@@ -68,7 +68,8 @@ returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the Do
 - `backend/app/schemas/user.py` — `UserOut` (public), `MeOut` (+ email), `ProfileUpdate`; `backend/app/schemas/auth.py` — email register/login/token DTOs (`EmailStr`)
 - `backend/app/services/auth.py` — auth logic (create by email, authenticate by email, update profile)
 - `backend/app/services/users.py` — `get_user_by_id` (public profile lookup)
-- `backend/app/routers/auth.py` — `POST /auth/register`, `POST /auth/login` (email); `backend/app/routers/users.py` — `GET /users/me`, `PATCH /users/me`, `GET /users/{id}`
+- `backend/app/services/follows.py` — follow/unfollow (idempotent, race-safe upsert)
+- `backend/app/routers/auth.py` — `POST /auth/register`, `POST /auth/login` (email); `backend/app/routers/users.py` — `GET /users/me`, `PATCH /users/me`, `GET /users/{id}`; `backend/app/routers/follows.py` — `POST`/`DELETE /follow`
 - `backend/alembic/` + `alembic.ini` — Alembic (async); migrations: `dcfce07fa8f2` (schema), `30f2d801d8cb` (password_hash), `53dcc349a3d9` (email + nullable username)
 - `backend/requirements.txt` — fastapi, uvicorn[standard], sqlalchemy[asyncio], asyncpg, pydantic-settings, alembic, bcrypt, pyjwt, email-validator
 - `docker-compose.yml` — `postgres:16-alpine`, `env_file: backend/.env`, healthcheck
@@ -268,7 +269,7 @@ user:{id}:followers  -> (optional) cached follower count
 **Goal:** a fully working social feed with the *simplest correct* design — **no Redis
 timelines, no workers yet.** The home feed is built by querying Postgres directly.
 
-**Status:** In progress — 1.1–1.4 done (schema, auth, public profile lookup); 1.5 (follow graph) next.
+**Status:** In progress — 1.1–1.5 done (schema, auth, profiles, follow graph); 1.6 (posts) next.
 
 > Why naive first: this gives us a correct baseline to demo and to **benchmark**, so the
 > later optimizations have real before/after numbers. This "I started simple, measured,
@@ -279,7 +280,7 @@ timelines, no workers yet.** The home feed is built by querying Postgres directl
 - **1.2 — Auth foundation + app skeleton** — routers package, `get_session` dependency, `security.py` (bcrypt hashing + JWT encode/decode), a migration adding `users.password_hash`, and the `current_user` dependency that validates a **JWT bearer token**. _Done when:_ a protected route resolves the caller from a valid token (401 otherwise). _(Delivered: `security.py`, `deps.current_user`, `schemas/user.py`, `routers/users.py` with protected `GET /users/me`, migration `30f2d801d8cb`.)_ **[DONE]**
 - **1.3 — Auth API** — `POST /auth/register` (**email + password**, hashed) and `POST /auth/login` (**email**-based, returns a JWT); `PATCH /users/me` sets the username after registration. _Done when:_ a user can register, log in, and set their username. _(Delivered: `schemas/auth.py` (EmailStr), `services/auth.py`, `routers/auth.py`, `routers/users.py` `PATCH /me`; migration `53dcc349a3d9` adds `email` + nullable `username`; handles 201 / 409 / 401.)_ **[DONE]**
 - **1.4 — Users lookup** — `GET /users/{id}` (public profile) with Pydantic schemas. _Done when:_ a profile can be fetched. _(Delivered: `services/users.py` `get_user_by_id`, `routers/users.py` `GET /{id}` → `UserOut` (email hidden), 404 when missing; `/me` keeps precedence.)_ **[DONE]**
-- **1.5 — Follow graph** — `POST /follow` and `DELETE /follow` writing/removing rows in `follows` (idempotent, no self-follow; actor = current user). _Done when:_ follow/unfollow persist correctly.
+- **1.5 — Follow graph** — `POST /follow` and `DELETE /follow` writing/removing rows in `follows` (idempotent, no self-follow; actor = current user). _Done when:_ follow/unfollow persist correctly. _(Delivered: `schemas/follow.py`, `services/follows.py` (race-safe `ON CONFLICT DO NOTHING`), `routers/follows.py`; 400 self-follow, 404 missing target, idempotent.)_ **[DONE]**
 - **1.6 — Posts API** — `POST /posts` (author = current user) and `GET /users/{id}/posts` (author timeline, newest first). _Done when:_ posting and reading a user's posts work.
 - **1.7 — Home feed (fan-out-on-read)** — `GET /feed`: SQL join of posts from everyone the current user follows, `ORDER BY id DESC`, **cursor** paginated (`?cursor=&limit=`). _Done when:_ feed is correct and pagination is stable.
 - **1.8 — Seed script** — generate N users (with passwords), a random follow graph, and posts for local testing/benchmarking. _Done when:_ one command populates a demo dataset.

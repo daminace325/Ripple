@@ -18,12 +18,12 @@ demoable system — never a half-broken one.
 
 ## Implementation status (live tracker)
 
-> Updated: 2026-06-19 — Legend: **Done** / **In progress** / **Not started** / **Deferred**
+> Updated: 2026-06-29 — Legend: **Done** / **In progress** / **Not started** / **Deferred**
 
 | Phase | Status | Notes |
 |---|---|---|
 | 0 — Scaffolding | In progress (core done) | Postgres + `/healthz` live; Redis/Alembic/README deferred until needed |
-| 1 — MVP + auth (fan-out-on-read) | In progress | 1.1–1.9 done + UI polish + likes; comments next (1.13–1.14); tests at 1.15 |
+| 1 — MVP + auth (fan-out-on-read) | In progress | 1.1–1.9 done + UI polish + likes + post detail; comments next (1.14); tests at 1.15 |
 | 2 — Redis timelines + workers | Not started | Redis is introduced here, not in Phase 0 |
 | 3 — Celebrity hybrid | Not started | |
 | 4 — Optimization + benchmarks | Not started | |
@@ -63,7 +63,7 @@ returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the Do
 - `backend/app/main.py` — FastAPI app; CORS for the frontend; `/healthz` pings Postgres; includes auth/users/follows/posts/feed routers; lifespan disposes the engine
 - `backend/app/config.py` — pydantic-settings; required `DATABASE_URL` + `JWT_SECRET_KEY` (+ `jwt_algorithm`, `access_token_expire_minutes`, `cors_origins`)
 - `backend/app/db.py` — async SQLAlchemy engine + `async_sessionmaker` + `get_session()` dependency
-- `backend/app/models.py` — SQLAlchemy models (`Base`): `users` (`email` + nullable `username` + `password_hash`), `follows`, `posts`
+- `backend/app/models.py` — SQLAlchemy models (`Base`): `users` (`email` + nullable `username` + `password_hash`), `follows`, `posts`, `likes`
 - `backend/app/security.py` — bcrypt password hashing + JWT encode/decode
 - `backend/app/deps.py` — `current_user` dependency (validates the JWT bearer token)
 - `backend/app/schemas/user.py` — `UserOut` (public), `MeOut` (+ email), `ProfileUpdate`; `backend/app/schemas/auth.py` — email register/login/token DTOs (`EmailStr`)
@@ -72,12 +72,12 @@ returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the Do
 - `backend/app/services/follows.py` — follow/unfollow (idempotent, race-safe upsert)
 - `backend/app/services/posts.py` — create post, list a user's posts (newest-first)
 - `backend/app/services/feed.py` — home feed query (own + followees, keyset cursor, author eager-loaded)
-- `backend/app/routers/auth.py` — `POST /auth/register`, `POST /auth/login` (email); `backend/app/routers/users.py` — `GET /users/me`, `PATCH /users/me`, `GET /users/search`, `GET /users/{id}`, `GET /users/by-username/{username}` (profile + counts); `backend/app/routers/follows.py` — `POST`/`DELETE /follow`; `backend/app/routers/posts.py` — `POST /posts`, `GET /users/{id}/posts`; `backend/app/routers/feed.py` — `GET /feed` (items include author)
+- `backend/app/routers/auth.py` — `POST /auth/register`, `POST /auth/login` (email); `backend/app/routers/users.py` — `GET /users/me`, `PATCH /users/me`, `GET /users/search`, `GET /users/{id}`, `GET /users/by-username/{username}` (profile + counts); `backend/app/routers/follows.py` — `POST`/`DELETE /follow`; `backend/app/routers/posts.py` — `POST /posts`, `GET /posts/{id}` (detail + author + likes), `GET /users/{id}/posts` (enriched, auth), `POST`/`DELETE /posts/{id}/like`; `backend/app/routers/feed.py` — `GET /feed` (items include author + like_count/liked)
 - `backend/scripts/seed.py` — demo data generator (N users, random follow graph, posts; `python -m scripts.seed`); `backend/scripts/unseed.py` — removes seeded users (`python -m scripts.unseed`)
-- `backend/alembic/` + `alembic.ini` — Alembic (async); migrations: `dcfce07fa8f2` (schema), `30f2d801d8cb` (password_hash), `53dcc349a3d9` (email + nullable username)
+- `backend/alembic/` + `alembic.ini` — Alembic (async); migrations: `dcfce07fa8f2` (schema), `30f2d801d8cb` (password_hash), `53dcc349a3d9` (email + nullable username), `0be43df3a9c7` (likes)
 - `backend/requirements.txt` — fastapi, uvicorn[standard], sqlalchemy[asyncio], asyncpg, pydantic-settings, alembic, bcrypt, pyjwt, email-validator (version-pinned)
 - `docker-compose.yml` — `postgres:16-alpine`, `env_file: backend/.env`, healthcheck
-- `frontend/` — Next.js app: `lib/api.ts` (typed client), `lib/auth.tsx` (auth context); `app/login`, `app/register`; route group `app/(app)/` (Home/Explore/Profile/Settings) with sidebar; `components/` (Sidebar/PostCard/Composer/FollowButton/UserCard); `.env.local` sets `NEXT_PUBLIC_API_BASE_URL`
+- `frontend/` — Next.js app: `lib/api.ts` (typed client), `lib/auth.tsx` (auth context); `app/login`, `app/register`; route group `app/(app)/` (Home/Explore/Profile/Settings/`p/[id]` post detail) with sidebar; `components/` (Sidebar/PostCard/Composer/FollowButton/UserCard/LikeButton/Avatar); `.env.local` sets `NEXT_PUBLIC_API_BASE_URL`
 
 ---
 
@@ -294,7 +294,7 @@ user:{id}:followers  -> (optional) cached follower count
 **Goal:** a fully working social feed with the *simplest correct* design — **no Redis
 timelines, no workers yet.** The home feed is built by querying Postgres directly.
 
-**Status:** In progress — 1.1–1.9 done (backend + Next.js UI: register/login/feed/compose/follow); hardening pass done (409 conflicts, bcrypt 72-byte cap, feed pagination, CORS config, pinned deps); UI polish (Inter font + avatars) done; likes done (1.12); comments next (1.13–1.14); integration tests deferred to 1.15 (gate before Phase 2).
+**Status:** In progress — 1.1–1.9 done (backend + Next.js UI: register/login/feed/compose/follow); hardening pass done (409 conflicts, bcrypt 72-byte cap, feed pagination, CORS config, pinned deps); UI polish (Inter font + avatars) done; likes done (1.12); post detail done (1.13); comments next (1.14); integration tests deferred to 1.15 (gate before Phase 2).
 
 > Why naive first: this gives us a correct baseline to demo and to **benchmark**, so the
 > later optimizations have real before/after numbers. This "I started simple, measured,
@@ -312,7 +312,7 @@ timelines, no workers yet.** The home feed is built by querying Postgres directl
 - **1.9 — Frontend UI (Next.js)** — register/login screens, then compose box, feed list, follow button — lightweight but usable, authenticating with the JWT. _Done when:_ the full loop works in the browser. _(Delivered: typed client + JWT in localStorage; auth screens; **multi-page Twitter-style app** — route group `app/(app)/` with a sidebar (Home / Explore / Profile / Settings), `components/` (Sidebar/PostCard/Composer/FollowButton/UserCard), `lib/auth.tsx` auth context. Backend support: CORS, feed items enriched with `author`, `GET /users/search` (follow state), profile counts (`followers_count`/`following_count`/`is_following`) on `GET /users/by-username`. Verified in-browser: nav, feed/compose, explore + follow toggle, profile + counts.)_ **[DONE]**
 - **1.11 — UI polish** — Inter font, initials avatars, hover states, brand accent. **[DONE]** (more polish to follow with engagement).
 - **1.12 — Likes** ✅ — `likes(user_id, post_id)` table (+`ix_likes_post_id`); `POST`/`DELETE /posts/{id}/like` (idempotent via ON CONFLICT, like the follow pattern); feed items enriched with `like_count` + `liked`; optimistic like button. DB-counted now, Redis counters in Phase 4.
-- **1.13 — Post detail page** — `GET /posts/{id}` (author + counts + `liked`); frontend `/p/{id}` route; cards link to it. _Done when:_ a single post opens with its stats.
+- **1.13 — Post detail page** ✅ — `GET /posts/{id}` (auth; author + `like_count` + `liked`, 404 if missing); frontend `/p/{id}` route reusing `PostCard` (centered boxed card); cards are whole-card clickable via a stretched-link overlay; `GET /users/{id}/posts` enriched to match. _Done when:_ a single post opens with its stats.
 - **1.14 — Comments** — `comments(id, post_id, author_id, content)` (single-level); `GET`/`POST /posts/{id}/comments`; shown on the detail page. _Done when:_ users can comment and counts show.
 - **1.15 — Integration tests** — pytest + httpx across auth/users/follow/posts/feed + likes/comments; the gate before Phase 2. _Done when:_ `pytest` is green.
 

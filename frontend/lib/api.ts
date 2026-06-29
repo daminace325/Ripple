@@ -135,6 +135,15 @@ export interface PostOut {
     created_at: string;
 }
 
+export interface PostDetail {
+    id: number;
+    content: string;
+    created_at: string;
+    author: FeedAuthor;
+    like_count: number;
+    liked: boolean;
+}
+
 interface TokenResponse {
     access_token: string;
     token_type: string;
@@ -186,10 +195,10 @@ export function searchUsers(q: string, limit = 20): Promise<UserCard[]> {
     return request<UserCard[]>(`/users/search?${params.toString()}`);
 }
 
-export function getUserPosts(userId: number, limit = 20): Promise<PostOut[]> {
+export function getUserPosts(userId: number, limit = 20): Promise<PostDetail[]> {
     const params = new URLSearchParams();
     params.set("limit", String(limit));
-    return request<PostOut[]>(`/users/${userId}/posts?${params.toString()}`);
+    return request<PostDetail[]>(`/users/${userId}/posts?${params.toString()}`);
 }
 
 export function follow(followeeId: number): Promise<unknown> {
@@ -219,6 +228,10 @@ export function getFeed(cursor?: number | null, limit = 20): Promise<FeedPage> {
     if (cursor) params.set("cursor", String(cursor));
     params.set("limit", String(limit));
     return request<FeedPage>(`/feed?${params.toString()}`);
+}
+
+export function getPost(id: number): Promise<PostDetail> {
+    return request<PostDetail>(`/posts/${id}`);
 }
 
 export interface LikeResponse {

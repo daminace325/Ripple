@@ -1,5 +1,6 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models import Post
 
@@ -10,6 +11,13 @@ async def create_post(session: AsyncSession, author_id: int, content: str) -> Po
     await session.commit()
     await session.refresh(post)
     return post
+
+
+async def get_post(session: AsyncSession, post_id: int) -> Post | None:
+    result = await session.execute(
+        select(Post).options(selectinload(Post.author)).where(Post.id == post_id)
+    )
+    return result.scalar_one_or_none()
 
 
 async def get_user_posts(

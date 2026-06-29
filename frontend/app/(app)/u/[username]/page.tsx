@@ -11,7 +11,7 @@ import {
     ApiError,
     getProfile,
     getUserPosts,
-    type PostOut,
+    type PostDetail,
     type UserProfile,
 } from "@/lib/api";
 
@@ -23,7 +23,7 @@ export default function ProfilePage({
     const { username } = use(params);
     const { me } = useAuth();
     const [profile, setProfile] = useState<UserProfile | null>(null);
-    const [posts, setPosts] = useState<PostOut[]>([]);
+    const [posts, setPosts] = useState<PostDetail[]>([]);
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
 
@@ -115,6 +115,9 @@ export default function ProfilePage({
                             username: profile.username,
                             display_name: profile.display_name,
                         }}
+                        postId={p.id}
+                        likeCount={p.like_count}
+                        liked={p.liked}
                     />
                 ))
             )}

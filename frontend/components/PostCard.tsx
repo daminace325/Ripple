@@ -73,7 +73,7 @@ export default function PostCard({
                 <p className="whitespace-pre-wrap break-words">{content}</p>
                 {postId != null && (
                     <div className="mt-2 flex items-center gap-5">
-                        <div className="relative z-10 w-fit">
+                        <div className="inline-flex items-center relative z-10 w-fit">
                             <LikeButton
                                 postId={postId}
                                 initialLiked={liked ?? false}

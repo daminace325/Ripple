@@ -67,15 +67,15 @@ export default function PostDetailPage({
 
     return (
         <div>
-            <div className="flex items-center gap-3 border-b border-zinc-200 p-4 dark:border-zinc-800">
+            <div className="border-b border-zinc-200 p-4 dark:border-zinc-800">
                 <Link
                     href="/"
-                    className="text-xl text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-                    aria-label="Back"
+                    aria-label="Back to home"
+                    className="inline-flex items-center gap-3 text-zinc-500 transition-colors hover:text-zinc-900 dark:hover:text-zinc-100"
                 >
-                    ←
+                    <span className="text-xl">←</span>
+                    <span className="text-xl font-bold">Post</span>
                 </Link>
-                <h1 className="text-xl font-bold">Post</h1>
             </div>
             {loading ? (
                 <p className="p-4 text-zinc-500">Loading…</p>

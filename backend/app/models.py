@@ -10,7 +10,7 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -57,6 +57,8 @@ class Post(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+    author: Mapped["User"] = relationship(lazy="raise")
 
     # Supports "a user's posts, newest first" and feed joins (backward index scan covers DESC).
     __table_args__ = (Index("ix_posts_author_id_id", "author_id", "id"),)

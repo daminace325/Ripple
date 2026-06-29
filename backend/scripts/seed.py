@@ -12,6 +12,7 @@ safe to run repeatedly. Every seeded user shares the password "password123".
 import argparse
 import asyncio
 import random
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete
 
@@ -66,10 +67,15 @@ async def seed(n_users: int, n_posts: int, n_follows: int) -> None:
         session.add_all(follows)
 
         posts: list[Post] = []
+        now = datetime.now(timezone.utc)
         for user in users:
             for _ in range(n_posts):
                 posts.append(
-                    Post(author_id=user.id, content=f"{user.username}: {_sentence()}"[:280])
+                    Post(
+                        author_id=user.id,
+                        content=f"{user.username}: {_sentence()}"[:280],
+                        created_at=now - timedelta(minutes=random.randint(0, 20000)),
+                    )
                 )
         session.add_all(posts)
         await session.commit()

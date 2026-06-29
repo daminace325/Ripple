@@ -44,6 +44,7 @@ demoable system — never a half-broken one.
   `X-User-Id` placeholder is dropped.
 - **Email-based accounts**: registration takes **email + password** (email is the login
   identifier); the **username is optional and set after registration** via `PATCH /users/me`.
+- **Hardening pass (post-1.9):** register/username conflicts return **409** (IntegrityError-safe); passwords truncated to bcrypt's 72-byte limit; feed avoids empty last page (`limit+1`); CORS origins via `settings.cors_origins`; `GET /users/{id}` now requires auth; `requirements.txt` version-pinned; frontend redirects authed users away from login/register; seed staggers timestamps.
 
 ### Phase 0 checklist
 - [x] Repo layout (`backend/app`, `frontend/`, `docker-compose.yml`, `.env`)
@@ -60,7 +61,7 @@ returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the Do
 
 ### Current state snapshot (files)
 - `backend/app/main.py` — FastAPI app; CORS for the frontend; `/healthz` pings Postgres; includes auth/users/follows/posts/feed routers; lifespan disposes the engine
-- `backend/app/config.py` — pydantic-settings; required `DATABASE_URL` + `JWT_SECRET_KEY` (+ `jwt_algorithm`, `access_token_expire_minutes`)
+- `backend/app/config.py` — pydantic-settings; required `DATABASE_URL` + `JWT_SECRET_KEY` (+ `jwt_algorithm`, `access_token_expire_minutes`, `cors_origins`)
 - `backend/app/db.py` — async SQLAlchemy engine + `async_sessionmaker` + `get_session()` dependency
 - `backend/app/models.py` — SQLAlchemy models (`Base`): `users` (`email` + nullable `username` + `password_hash`), `follows`, `posts`
 - `backend/app/security.py` — bcrypt password hashing + JWT encode/decode
@@ -74,7 +75,7 @@ returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the Do
 - `backend/app/routers/auth.py` — `POST /auth/register`, `POST /auth/login` (email); `backend/app/routers/users.py` — `GET /users/me`, `PATCH /users/me`, `GET /users/search`, `GET /users/{id}`, `GET /users/by-username/{username}` (profile + counts); `backend/app/routers/follows.py` — `POST`/`DELETE /follow`; `backend/app/routers/posts.py` — `POST /posts`, `GET /users/{id}/posts`; `backend/app/routers/feed.py` — `GET /feed` (items include author)
 - `backend/scripts/seed.py` — demo data generator (N users, random follow graph, posts; `python -m scripts.seed`)
 - `backend/alembic/` + `alembic.ini` — Alembic (async); migrations: `dcfce07fa8f2` (schema), `30f2d801d8cb` (password_hash), `53dcc349a3d9` (email + nullable username)
-- `backend/requirements.txt` — fastapi, uvicorn[standard], sqlalchemy[asyncio], asyncpg, pydantic-settings, alembic, bcrypt, pyjwt, email-validator
+- `backend/requirements.txt` — fastapi, uvicorn[standard], sqlalchemy[asyncio], asyncpg, pydantic-settings, alembic, bcrypt, pyjwt, email-validator (version-pinned)
 - `docker-compose.yml` — `postgres:16-alpine`, `env_file: backend/.env`, healthcheck
 - `frontend/` — Next.js app: `lib/api.ts` (typed client), `lib/auth.tsx` (auth context); `app/login`, `app/register`; route group `app/(app)/` (Home/Explore/Profile/Settings) with sidebar; `components/` (Sidebar/PostCard/Composer/FollowButton/UserCard); `.env.local` sets `NEXT_PUBLIC_API_BASE_URL`
 
@@ -274,7 +275,7 @@ user:{id}:followers  -> (optional) cached follower count
 **Goal:** a fully working social feed with the *simplest correct* design — **no Redis
 timelines, no workers yet.** The home feed is built by querying Postgres directly.
 
-**Status:** In progress — 1.1–1.9 done (backend + Next.js UI: register/login/feed/compose/follow); 1.10 (integration tests) next.
+**Status:** In progress — 1.1–1.9 done (backend + Next.js UI: register/login/feed/compose/follow); hardening pass done (409 conflicts, bcrypt 72-byte cap, feed pagination, CORS config, pinned deps); 1.10 (integration tests) next.
 
 > Why naive first: this gives us a correct baseline to demo and to **benchmark**, so the
 > later optimizations have real before/after numbers. This "I started simple, measured,

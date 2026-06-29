@@ -9,12 +9,16 @@ export default function ExplorePage() {
     const [q, setQ] = useState("");
     const [users, setUsers] = useState<UserCardType[]>([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         const timer = setTimeout(async () => {
             setLoading(true);
+            setError(null);
             try {
                 setUsers(await searchUsers(q.trim()));
+            } catch {
+                setError("Could not load users");
             } finally {
                 setLoading(false);
             }
@@ -37,6 +41,8 @@ export default function ExplorePage() {
             </div>
             {loading ? (
                 <p className="p-4 text-zinc-500">Searching…</p>
+            ) : error ? (
+                <p className="p-4 text-sm text-red-600">{error}</p>
             ) : users.length === 0 ? (
                 <p className="p-4 text-zinc-500">No users found.</p>
             ) : (

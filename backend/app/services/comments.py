@@ -17,12 +17,15 @@ async def create_comment(
     return result.scalar_one()
 
 
-async def list_comments(session: AsyncSession, post_id: int) -> list[Comment]:
+async def list_comments(
+    session: AsyncSession, post_id: int, limit: int = 50
+) -> list[Comment]:
     result = await session.execute(
         select(Comment)
         .options(selectinload(Comment.author))
         .where(Comment.post_id == post_id)
         .order_by(Comment.id.asc())
+        .limit(limit)
     )
     return list(result.scalars().all())
 

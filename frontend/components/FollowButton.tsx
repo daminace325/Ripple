@@ -18,16 +18,19 @@ export default function FollowButton({
 
     async function toggle() {
         setBusy(true);
+        const prev = following;
+        const next = !prev;
+        setFollowing(next);
+        onChange?.(next);
         try {
-            if (following) {
+            if (prev) {
                 await unfollow(userId);
-                setFollowing(false);
-                onChange?.(false);
             } else {
                 await follow(userId);
-                setFollowing(true);
-                onChange?.(true);
             }
+        } catch {
+            setFollowing(prev);
+            onChange?.(prev);
         } finally {
             setBusy(false);
         }

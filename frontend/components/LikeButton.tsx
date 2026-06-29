@@ -42,7 +42,7 @@ export default function LikeButton({
             onClick={toggle}
             disabled={busy}
             aria-pressed={liked}
-            className={`group mt-2 inline-flex items-center gap-1.5 text-sm transition-colors disabled:opacity-60 ${
+            className={`group inline-flex items-center gap-1.5 text-sm transition-colors disabled:opacity-60 ${
                 liked
                     ? "text-rose-600"
                     : "text-zinc-500 hover:text-rose-600"

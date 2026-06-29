@@ -84,6 +84,19 @@ export default function ProfilePage({
                         <FollowButton
                             userId={profile.id}
                             initialFollowing={profile.is_following}
+                            onChange={(following) =>
+                                setProfile((p) =>
+                                    p
+                                        ? {
+                                              ...p,
+                                              is_following: following,
+                                              followers_count:
+                                                  p.followers_count +
+                                                  (following ? 1 : -1),
+                                          }
+                                        : p,
+                                )
+                            }
                         />
                     )}
                 </div>

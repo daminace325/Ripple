@@ -102,6 +102,10 @@ async def unlike_post(
     current_user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> LikeResponse:
+    if await session.get(Post, post_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Post not found"
+        )
     await likes_service.unlike_post(session, current_user.id, post_id)
     return LikeResponse(
         post_id=post_id, liked=False,
@@ -114,12 +118,13 @@ async def list_comments(
     post_id: int,
     current_user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
 ) -> list[CommentOut]:
     if await session.get(Post, post_id) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Post not found"
         )
-    return await comments_service.list_comments(session, post_id)
+    return await comments_service.list_comments(session, post_id, limit)
 
 
 @router.post(

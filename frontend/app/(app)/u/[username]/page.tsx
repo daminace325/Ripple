@@ -5,6 +5,7 @@ import { use, useEffect, useState } from "react";
 
 import FollowButton from "@/components/FollowButton";
 import PostCard from "@/components/PostCard";
+import Avatar from "@/components/Avatar";
 import { useAuth } from "@/lib/auth";
 import {
     ApiError,
@@ -59,11 +60,18 @@ export default function ProfilePage({
         <div>
             <div className="border-b border-zinc-200 p-4 dark:border-zinc-800">
                 <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0">
-                        <h1 className="truncate text-xl font-bold">
-                            {profile.display_name ?? handle}
-                        </h1>
-                        <p className="text-zinc-500">{handle}</p>
+                    <div className="flex min-w-0 gap-3">
+                        <Avatar
+                            name={profile.display_name ?? handle}
+                            id={profile.id}
+                            size={56}
+                        />
+                        <div className="min-w-0">
+                            <h1 className="truncate text-xl font-bold">
+                                {profile.display_name ?? handle}
+                            </h1>
+                            <p className="text-zinc-500">{handle}</p>
+                        </div>
                     </div>
                     {isMe ? (
                         <Link

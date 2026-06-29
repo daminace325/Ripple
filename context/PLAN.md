@@ -23,7 +23,7 @@ demoable system — never a half-broken one.
 | Phase | Status | Notes |
 |---|---|---|
 | 0 — Scaffolding | In progress (core done) | Postgres + `/healthz` live; Redis/Alembic/README deferred until needed |
-| 1 — MVP + auth (fan-out-on-read) | In progress | 1.1–1.9 done (full product + UI); 1.10 (tests) next |
+| 1 — MVP + auth (fan-out-on-read) | In progress | 1.1–1.9 done + UI polish; likes/comments planned (1.12–1.14); 1.10 (tests) next |
 | 2 — Redis timelines + workers | Not started | Redis is introduced here, not in Phase 0 |
 | 3 — Celebrity hybrid | Not started | |
 | 4 — Optimization + benchmarks | Not started | |
@@ -214,6 +214,20 @@ posts
   content       TEXT NOT NULL
   created_at    TIMESTAMPTZ DEFAULT now()
   -- index: (author_id, id DESC)
+
+likes                              -- [1.12]
+  user_id       BIGINT FK -> users.id
+  post_id       BIGINT FK -> posts.id
+  created_at    TIMESTAMPTZ DEFAULT now()
+  PRIMARY KEY (user_id, post_id)
+
+comments                           -- [1.14]
+  id            BIGSERIAL PK
+  post_id       BIGINT FK -> posts.id
+  author_id     BIGINT FK -> users.id
+  content       TEXT NOT NULL
+  created_at    TIMESTAMPTZ DEFAULT now()
+  -- index: (post_id, id)
 ```
 
 ### Redis keys (introduced Phase 2+)
@@ -239,6 +253,11 @@ user:{id}:followers  -> (optional) cached follower count
 | POST | `/follow` | 1 | follow a user |
 | DELETE | `/follow` | 1 | unfollow |
 | POST | `/posts` | 1 | create a post |
+| GET | `/posts/{id}` | 1 | single post (counts + liked) |
+| POST | `/posts/{id}/like` | 1 | like a post |
+| DELETE | `/posts/{id}/like` | 1 | unlike |
+| GET | `/posts/{id}/comments` | 1 | list comments |
+| POST | `/posts/{id}/comments` | 1 | add comment |
 | GET | `/feed` | 1 | home timeline (cursor paginated) |
 | GET | `/users/{id}/posts` | 1 | a user's own posts |
 | GET | `/healthz` | 0 | health check |
@@ -275,7 +294,7 @@ user:{id}:followers  -> (optional) cached follower count
 **Goal:** a fully working social feed with the *simplest correct* design — **no Redis
 timelines, no workers yet.** The home feed is built by querying Postgres directly.
 
-**Status:** In progress — 1.1–1.9 done (backend + Next.js UI: register/login/feed/compose/follow); hardening pass done (409 conflicts, bcrypt 72-byte cap, feed pagination, CORS config, pinned deps); 1.10 (integration tests) next.
+**Status:** In progress — 1.1–1.9 done (backend + Next.js UI: register/login/feed/compose/follow); hardening pass done (409 conflicts, bcrypt 72-byte cap, feed pagination, CORS config, pinned deps); 1.10 (integration tests) next. UI polish (Inter font + avatars) done; likes/comments queued at 1.12–1.14.
 
 > Why naive first: this gives us a correct baseline to demo and to **benchmark**, so the
 > later optimizations have real before/after numbers. This "I started simple, measured,
@@ -292,6 +311,10 @@ timelines, no workers yet.** The home feed is built by querying Postgres directl
 - **1.8 — Seed script** — generate N users (with passwords), a random follow graph, and posts for local testing/benchmarking. _Done when:_ one command populates a demo dataset. _(Delivered: `scripts/seed.py` — `python -m scripts.seed [--users --posts --follows]`; idempotent (clears `seeduser*@example.com` first), shared bcrypt hash; default 20 users / 100 posts / 100 follows.)_ **[DONE]**
 - **1.9 — Frontend UI (Next.js)** — register/login screens, then compose box, feed list, follow button — lightweight but usable, authenticating with the JWT. _Done when:_ the full loop works in the browser. _(Delivered: typed client + JWT in localStorage; auth screens; **multi-page Twitter-style app** — route group `app/(app)/` with a sidebar (Home / Explore / Profile / Settings), `components/` (Sidebar/PostCard/Composer/FollowButton/UserCard), `lib/auth.tsx` auth context. Backend support: CORS, feed items enriched with `author`, `GET /users/search` (follow state), profile counts (`followers_count`/`following_count`/`is_following`) on `GET /users/by-username`. Verified in-browser: nav, feed/compose, explore + follow toggle, profile + counts.)_ **[DONE]**
 - **1.10 — Integration tests** — pytest + httpx covering auth + users/follow/posts/feed happy paths. _Done when:_ `pytest` is green.
+- **1.11 — UI polish** — Inter font, initials avatars, hover states, brand accent. **[DONE]** (more polish to follow with engagement).
+- **1.12 — Likes** — `likes(user_id, post_id)` table; `POST`/`DELETE /posts/{id}/like` (idempotent, like the follow pattern); feed/post items enriched with `like_count` + `liked`. DB-counted now, Redis counters in Phase 4. _Done when:_ like/unlike persists and counts render.
+- **1.13 — Post detail page** — `GET /posts/{id}` (author + counts + `liked`); frontend `/p/{id}` route; cards link to it. _Done when:_ a single post opens with its stats.
+- **1.14 — Comments** — `comments(id, post_id, author_id, content)` (single-level); `GET`/`POST /posts/{id}/comments`; shown on the detail page. _Done when:_ users can comment and counts show.
 
 **Definition of done**
 - I can: register, log in, follow people, post, and see a correct home feed in the browser.

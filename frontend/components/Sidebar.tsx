@@ -34,7 +34,7 @@ export default function Sidebar() {
     return (
         <aside className="sticky top-0 hidden h-screen w-56 shrink-0 flex-col justify-between p-3 sm:flex">
             <div className="space-y-1">
-                <div className="mb-4 px-4 text-2xl font-bold">Ripple</div>
+                <div className="mb-4 px-4 text-2xl font-bold text-sky-600">Ripple</div>
                 <NavLink href="/" label="Home" active={pathname === "/"} />
                 <NavLink
                     href="/explore"

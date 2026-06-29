@@ -20,6 +20,7 @@ class FeedItem(BaseModel):
     author: FeedAuthor
     like_count: int = 0
     liked: bool = False
+    comment_count: int = 0
 
 
 class FeedPage(BaseModel):

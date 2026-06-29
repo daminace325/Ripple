@@ -7,6 +7,7 @@ from app.db import get_session
 from app.deps import get_current_user
 from app.models import User
 from app.schemas.feed import FeedItem, FeedPage
+from app.services import comments as comments_service
 from app.services import feed as feed_service
 from app.services import likes as likes_service
 
@@ -27,10 +28,12 @@ async def get_feed(
     ids = [p.id for p in posts]
     counts = await likes_service.like_counts(session, ids)
     liked = await likes_service.liked_ids(session, current_user.id, ids)
+    ccounts = await comments_service.comment_counts(session, ids)
     items = [
         FeedItem(
             id=p.id, content=p.content, created_at=p.created_at, author=p.author,
             like_count=counts.get(p.id, 0), liked=p.id in liked,
+            comment_count=ccounts.get(p.id, 0),
         )
         for p in posts
     ]

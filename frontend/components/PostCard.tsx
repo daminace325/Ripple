@@ -16,6 +16,7 @@ interface PostCardProps {
     postId?: number;
     likeCount?: number;
     liked?: boolean;
+    commentCount?: number;
     clickable?: boolean;
 }
 
@@ -26,6 +27,7 @@ export default function PostCard({
     postId,
     likeCount,
     liked,
+    commentCount,
     clickable = true,
 }: PostCardProps) {
     const handle = author.username
@@ -70,12 +72,26 @@ export default function PostCard({
                 </div>
                 <p className="whitespace-pre-wrap break-words">{content}</p>
                 {postId != null && (
-                    <div className="relative z-10 mt-2 w-fit">
-                        <LikeButton
-                            postId={postId}
-                            initialLiked={liked ?? false}
-                            initialCount={likeCount ?? 0}
-                        />
+                    <div className="mt-2 flex items-center gap-5">
+                        <div className="relative z-10 w-fit">
+                            <LikeButton
+                                postId={postId}
+                                initialLiked={liked ?? false}
+                                initialCount={likeCount ?? 0}
+                            />
+                        </div>
+                        <span className="inline-flex items-center gap-1.5 text-sm text-zinc-500">
+                            <svg
+                                viewBox="0 0 24 24"
+                                className="h-5 w-5"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth={2}
+                            >
+                                <path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.5 8.6 8.6 0 0 1-4-1L3 20l1-5.5a8.4 8.4 0 0 1-1-4A8.4 8.4 0 0 1 11.5 2 8.4 8.4 0 0 1 21 11.5z" />
+                            </svg>
+                            <span className="tabular-nums">{commentCount ?? 0}</span>
+                        </span>
                     </div>
                 )}
             </div>

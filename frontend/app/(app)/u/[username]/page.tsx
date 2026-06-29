@@ -118,6 +118,7 @@ export default function ProfilePage({
                         postId={p.id}
                         likeCount={p.like_count}
                         liked={p.liked}
+                        commentCount={p.comment_count}
                     />
                 ))
             )}

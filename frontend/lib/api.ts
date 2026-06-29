@@ -121,6 +121,7 @@ export interface FeedItem {
     author: FeedAuthor;
     like_count: number;
     liked: boolean;
+    comment_count: number;
 }
 
 export interface FeedPage {
@@ -142,6 +143,14 @@ export interface PostDetail {
     author: FeedAuthor;
     like_count: number;
     liked: boolean;
+    comment_count: number;
+}
+
+export interface CommentOut {
+    id: number;
+    content: string;
+    created_at: string;
+    author: FeedAuthor;
 }
 
 interface TokenResponse {
@@ -246,4 +255,18 @@ export function likePost(postId: number): Promise<LikeResponse> {
 
 export function unlikePost(postId: number): Promise<LikeResponse> {
     return request<LikeResponse>(`/posts/${postId}/like`, { method: "DELETE" });
+}
+
+export function getComments(postId: number): Promise<CommentOut[]> {
+    return request<CommentOut[]>(`/posts/${postId}/comments`);
+}
+
+export function addComment(
+    postId: number,
+    content: string,
+): Promise<CommentOut> {
+    return request<CommentOut>(`/posts/${postId}/comments`, {
+        method: "POST",
+        body: JSON.stringify({ content }),
+    });
 }

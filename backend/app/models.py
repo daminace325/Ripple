@@ -81,3 +81,23 @@ class Like(Base):
         PrimaryKeyConstraint("user_id", "post_id"),
         Index("ix_likes_post_id", "post_id"),
     )
+
+
+class Comment(Base):
+    __tablename__ = "comments"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    post_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("posts.id", ondelete="CASCADE"), nullable=False
+    )
+    author_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    author: Mapped["User"] = relationship(lazy="raise")
+
+    __table_args__ = (Index("ix_comments_post_id_id", "post_id", "id"),)

@@ -61,6 +61,7 @@ export default function HomePage() {
                         postId={it.id}
                         likeCount={it.like_count}
                         liked={it.liked}
+                        commentCount={it.comment_count}
                     />
                 ))
             )}

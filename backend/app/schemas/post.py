@@ -33,6 +33,20 @@ class PostDetail(BaseModel):
     author: PostAuthor
     like_count: int = 0
     liked: bool = False
+    comment_count: int = 0
+
+
+class CommentCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=280)
+
+
+class CommentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    content: str
+    created_at: datetime
+    author: PostAuthor
 
 
 class LikeResponse(BaseModel):

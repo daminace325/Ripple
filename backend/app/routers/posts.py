@@ -6,7 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.deps import get_current_user
 from app.models import Post, User
-from app.schemas.post import PostCreate, PostOut
+from app.schemas.post import LikeResponse, PostCreate, PostOut
+from app.services import likes as likes_service
 from app.services import posts as posts_service
 from app.services import users as users_service
 
@@ -34,3 +35,33 @@ async def list_user_posts(
             status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
         )
     return await posts_service.get_user_posts(session, user_id, limit)
+
+
+@router.post("/posts/{post_id}/like", response_model=LikeResponse)
+async def like_post(
+    post_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> LikeResponse:
+    if await session.get(Post, post_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Post not found"
+        )
+    await likes_service.like_post(session, current_user.id, post_id)
+    return LikeResponse(
+        post_id=post_id, liked=True,
+        like_count=await likes_service.like_count(session, post_id),
+    )
+
+
+@router.delete("/posts/{post_id}/like", response_model=LikeResponse)
+async def unlike_post(
+    post_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> LikeResponse:
+    await likes_service.unlike_post(session, current_user.id, post_id)
+    return LikeResponse(
+        post_id=post_id, liked=False,
+        like_count=await likes_service.like_count(session, post_id),
+    )

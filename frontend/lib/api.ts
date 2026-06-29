@@ -119,6 +119,8 @@ export interface FeedItem {
     content: string;
     created_at: string;
     author: FeedAuthor;
+    like_count: number;
+    liked: boolean;
 }
 
 export interface FeedPage {
@@ -217,4 +219,18 @@ export function getFeed(cursor?: number | null, limit = 20): Promise<FeedPage> {
     if (cursor) params.set("cursor", String(cursor));
     params.set("limit", String(limit));
     return request<FeedPage>(`/feed?${params.toString()}`);
+}
+
+export interface LikeResponse {
+    post_id: number;
+    liked: boolean;
+    like_count: number;
+}
+
+export function likePost(postId: number): Promise<LikeResponse> {
+    return request<LikeResponse>(`/posts/${postId}/like`, { method: "POST" });
+}
+
+export function unlikePost(postId: number): Promise<LikeResponse> {
+    return request<LikeResponse>(`/posts/${postId}/like`, { method: "DELETE" });
 }

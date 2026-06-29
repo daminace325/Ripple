@@ -14,3 +14,9 @@ class PostOut(BaseModel):
     author_id: int
     content: str
     created_at: datetime
+
+
+class LikeResponse(BaseModel):
+    post_id: int
+    liked: bool
+    like_count: int

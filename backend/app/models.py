@@ -62,3 +62,22 @@ class Post(Base):
 
     # Supports "a user's posts, newest first" and feed joins (backward index scan covers DESC).
     __table_args__ = (Index("ix_posts_author_id_id", "author_id", "id"),)
+
+
+class Like(Base):
+    __tablename__ = "likes"
+
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    post_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("posts.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint("user_id", "post_id"),
+        Index("ix_likes_post_id", "post_id"),
+    )

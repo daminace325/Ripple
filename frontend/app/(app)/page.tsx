@@ -58,6 +58,9 @@ export default function HomePage() {
                         content={it.content}
                         createdAt={it.created_at}
                         author={it.author}
+                        postId={it.id}
+                        likeCount={it.like_count}
+                        liked={it.liked}
                     />
                 ))
             )}

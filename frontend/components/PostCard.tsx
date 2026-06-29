@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import Avatar from "@/components/Avatar";
+import LikeButton from "@/components/LikeButton";
 
 interface PostCardProps {
     content: string;
@@ -10,9 +11,19 @@ interface PostCardProps {
         username: string | null;
         display_name: string | null;
     };
+    postId?: number;
+    likeCount?: number;
+    liked?: boolean;
 }
 
-export default function PostCard({ content, createdAt, author }: PostCardProps) {
+export default function PostCard({
+    content,
+    createdAt,
+    author,
+    postId,
+    likeCount,
+    liked,
+}: PostCardProps) {
     const handle = author.username
         ? `@${author.username}`
         : (author.display_name ?? `User ${author.id}`);
@@ -40,6 +51,13 @@ export default function PostCard({ content, createdAt, author }: PostCardProps) 
                     </time>
                 </div>
                 <p className="whitespace-pre-wrap break-words">{content}</p>
+                {postId != null && (
+                    <LikeButton
+                        postId={postId}
+                        initialLiked={liked ?? false}
+                        initialCount={likeCount ?? 0}
+                    />
+                )}
             </div>
         </article>
     );

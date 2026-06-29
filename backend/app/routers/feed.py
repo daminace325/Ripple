@@ -8,6 +8,7 @@ from app.deps import get_current_user
 from app.models import User
 from app.schemas.feed import FeedItem, FeedPage
 from app.services import feed as feed_service
+from app.services import likes as likes_service
 
 router = APIRouter(tags=["feed"])
 
@@ -23,7 +24,14 @@ async def get_feed(
     has_more = len(posts) > limit
     posts = posts[:limit]
     next_cursor = posts[-1].id if has_more else None
-    return FeedPage(
-        items=[FeedItem.model_validate(p) for p in posts],
-        next_cursor=next_cursor,
-    )
+    ids = [p.id for p in posts]
+    counts = await likes_service.like_counts(session, ids)
+    liked = await likes_service.liked_ids(session, current_user.id, ids)
+    items = [
+        FeedItem(
+            id=p.id, content=p.content, created_at=p.created_at, author=p.author,
+            like_count=counts.get(p.id, 0), liked=p.id in liked,
+        )
+        for p in posts
+    ]
+    return FeedPage(items=items, next_cursor=next_cursor)

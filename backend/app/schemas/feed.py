@@ -18,6 +18,8 @@ class FeedItem(BaseModel):
     content: str
     created_at: datetime
     author: FeedAuthor
+    like_count: int = 0
+    liked: bool = False
 
 
 class FeedPage(BaseModel):

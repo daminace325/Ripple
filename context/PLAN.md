@@ -73,7 +73,7 @@ returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the Do
 - `backend/app/services/posts.py` — create post, list a user's posts (newest-first)
 - `backend/app/services/feed.py` — home feed query (own + followees, keyset cursor, author eager-loaded)
 - `backend/app/routers/auth.py` — `POST /auth/register`, `POST /auth/login` (email); `backend/app/routers/users.py` — `GET /users/me`, `PATCH /users/me`, `GET /users/search`, `GET /users/{id}`, `GET /users/by-username/{username}` (profile + counts); `backend/app/routers/follows.py` — `POST`/`DELETE /follow`; `backend/app/routers/posts.py` — `POST /posts`, `GET /users/{id}/posts`; `backend/app/routers/feed.py` — `GET /feed` (items include author)
-- `backend/scripts/seed.py` — demo data generator (N users, random follow graph, posts; `python -m scripts.seed`)
+- `backend/scripts/seed.py` — demo data generator (N users, random follow graph, posts; `python -m scripts.seed`); `backend/scripts/unseed.py` — removes seeded users (`python -m scripts.unseed`)
 - `backend/alembic/` + `alembic.ini` — Alembic (async); migrations: `dcfce07fa8f2` (schema), `30f2d801d8cb` (password_hash), `53dcc349a3d9` (email + nullable username)
 - `backend/requirements.txt` — fastapi, uvicorn[standard], sqlalchemy[asyncio], asyncpg, pydantic-settings, alembic, bcrypt, pyjwt, email-validator (version-pinned)
 - `docker-compose.yml` — `postgres:16-alpine`, `env_file: backend/.env`, healthcheck

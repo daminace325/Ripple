@@ -24,7 +24,7 @@ demoable system — never a half-broken one.
 |---|---|---|
 | 0 — Scaffolding | In progress (core done) | Postgres + `/healthz` live; Redis/Alembic/README deferred until needed |
 | 1 — MVP + auth (fan-out-on-read) | Done | 1.1–1.15 complete: full product + likes/comments + integration tests (41 passing) |
-| 2 — Redis timelines + workers | Not started | Redis is introduced here, not in Phase 0 |
+| 2 — Redis timelines + workers | In progress | 2.1 done (Redis service + async client + `/healthz` ping); 2.2+ next |
 | 3 — Celebrity hybrid | Not started | |
 | 4 — Optimization + benchmarks | Not started | |
 | 5 — Fault tolerance | Not started | |
@@ -52,7 +52,7 @@ demoable system — never a half-broken one.
 - [x] FastAPI app with config loading + `/healthz` pinging Postgres
 - [x] Secret hygiene — real creds only in git-ignored `backend/.env`; committed files use placeholders
 - [x] Root `.gitignore` (Python) + `.vscode/settings.json` pointing at the venv interpreter
-- [ ] Redis service — **deferred to Phase 2**
+- [x] Redis service — **done in Phase 2.1** (compose + async client + `/healthz` ping)
 - [x] Alembic migrations + schema — **done in Phase 1.1**
 - [ ] README "how to run" + Makefile — **deferred**
 
@@ -60,8 +60,9 @@ demoable system — never a half-broken one.
 returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the DoD moves to Phase 2.)
 
 ### Current state snapshot (files)
-- `backend/app/main.py` — FastAPI app; CORS for the frontend; `/healthz` pings Postgres; includes auth/users/follows/posts/feed routers; lifespan disposes the engine
-- `backend/app/config.py` — pydantic-settings; required `DATABASE_URL` + `JWT_SECRET_KEY` (+ `jwt_algorithm`, `access_token_expire_minutes`, `cors_origins`)
+- `backend/app/main.py` — FastAPI app; CORS for the frontend; `/healthz` pings Postgres + Redis; includes auth/users/follows/posts/feed routers; lifespan disposes the engine + Redis client
+- `backend/app/config.py` — pydantic-settings; required `DATABASE_URL` + `JWT_SECRET_KEY` (+ `redis_url`, `jwt_algorithm`, `access_token_expire_minutes`, `cors_origins`)
+- `backend/app/redis_client.py` — shared async Redis client (`redis.asyncio`, `decode_responses=True`) [2.1]
 - `backend/app/db.py` — async SQLAlchemy engine + `async_sessionmaker` + `get_session()` dependency
 - `backend/app/models.py` — SQLAlchemy models (`Base`): `users` (`email` + nullable `username` + `password_hash`), `follows`, `posts`, `likes`
 - `backend/app/security.py` — bcrypt password hashing + JWT encode/decode
@@ -77,7 +78,7 @@ returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the Do
 - `backend/alembic/` + `alembic.ini` — Alembic (async); migrations: `dcfce07fa8f2` (schema), `30f2d801d8cb` (password_hash), `53dcc349a3d9` (email + nullable username), `0be43df3a9c7` (likes), `80080e70e043` (comments)
 - `backend/requirements.txt` — fastapi, uvicorn[standard], sqlalchemy[asyncio], asyncpg, pydantic-settings, alembic, bcrypt, pyjwt, email-validator (version-pinned); test deps pytest, pytest-asyncio, httpx
 - `backend/tests/` + `pytest.ini` — pytest + httpx integration suite (conftest fixtures + 7 modules, 41 tests); runs against an auto-created `<db>_test` database with per-test schema rebuild
-- `docker-compose.yml` — `postgres:16-alpine`, `env_file: backend/.env`, healthcheck
+- `docker-compose.yml` — `postgres:16-alpine` + `redis:7-alpine` (appendonly, named volumes), `env_file: backend/.env`, healthchecks
 - `frontend/` — Next.js app: `lib/api.ts` (typed client), `lib/auth.tsx` (auth context); `app/login`, `app/register`; route group `app/(app)/` (Home/Explore/Profile/Settings/`p/[id]` post detail) with sidebar; `components/` (Sidebar/PostCard/Composer/FollowButton/UserCard/LikeButton/Avatar); `.env.local` sets `NEXT_PUBLIC_API_BASE_URL`
 
 ---
@@ -334,10 +335,10 @@ a follow graph, posting, and a cursor-paginated home timeline."
 **Goal:** replace fan-out-on-read with **fan-out-on-write**: precompute each user's home
 timeline in Redis so feed reads are O(1) cache hits. Introduce the **queue + worker**.
 
-**Status:** Not started. (Redis is first introduced here.)
+**Status:** In progress — 2.1 done (Redis service + async client + `/healthz` reports `redis: up`). 2.2+ next.
 
 **Sub-phases** (each an independent, self-contained chunk)
-- **2.1 — Redis service + client** — add `redis` to compose, a shared async client, and the Redis ping in `/healthz` (the deferred 0.6). _Done when:_ `/healthz` reports `redis: up`.
+- **2.1 — Redis service + client** ✅ — `redis:7-alpine` in compose (appendonly + `redis_data` volume, healthcheck), shared async client in `app/redis_client.py`, `redis_url` in config/`.env`, and the Redis ping in `/healthz`. _Done when:_ `/healthz` reports `redis: up`. _(Verified: `{"status":"ok","postgres":"up","redis":"up"}`; 41 tests still green.)_
 - **2.2 — Feed reads from Redis** — `GET /feed` reads `timeline:{current_user}` via `ZREVRANGE` and hydrates post bodies from Postgres. _Done when:_ feed reads skip the big SQL join on a cache hit.
 - **2.3 — Cache-miss fallback** — if a timeline is empty/missing, rebuild it from Postgres on the fly, then serve. _Done when:_ a cold user still gets a correct feed.
 - **2.4 — Fan-out worker process** — separate container; consumes `feed_stream` via a consumer group, loads the author's followers, pipelines `ZADD post_id` into each follower's `timeline:`. _Done when:_ the worker runs standalone and updates timelines.

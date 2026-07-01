@@ -6,6 +6,7 @@ class Settings(BaseSettings):
 
     app_name: str = "Ripple Feed"
     database_url: str
+    redis_url: str = "redis://localhost:6379/0"
 
     # Auth / JWT
     jwt_secret_key: str

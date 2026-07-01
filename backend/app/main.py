@@ -6,6 +6,7 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.db import engine
+from app.redis_client import redis_client
 from app.routers import auth, feed, follows, posts, users
 
 
@@ -13,6 +14,7 @@ from app.routers import auth, feed, follows, posts, users
 async def lifespan(app: FastAPI):
     yield
     await engine.dispose()
+    await redis_client.aclose()
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
@@ -41,7 +43,13 @@ async def health():
     except Exception:
         db_ok = False
 
+    try:
+        redis_ok = bool(await redis_client.ping())
+    except Exception:
+        redis_ok = False
+
     return {
-        "status": "ok" if db_ok else "degraded",
+        "status": "ok" if (db_ok and redis_ok) else "degraded",
         "postgres": "up" if db_ok else "down",
+        "redis": "up" if redis_ok else "down",
     }

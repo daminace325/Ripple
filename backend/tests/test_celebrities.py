@@ -17,6 +17,20 @@ async def test_follower_count_backfills_then_increments(
     assert await celebrities.get_follower_count(redis_conn, db_session, target["id"]) == 1
 
 
+async def test_follower_count_backfill_sets_self_healing_ttl(
+    client, make_user, db_session, redis_conn
+):
+    target, _ = await make_user("ttl@example.com", username="ttluser")
+    await celebrities.get_follower_count(redis_conn, db_session, target["id"])
+    assert await redis_conn.ttl(celebrities.follower_count_key(target["id"])) > 0
+
+
+async def test_follower_count_clamps_negative(make_user, db_session, redis_conn):
+    user, _ = await make_user("neg@example.com", username="neguser")
+    await redis_conn.set(celebrities.follower_count_key(user["id"]), -5)
+    assert await celebrities.get_follower_count(redis_conn, db_session, user["id"]) == 0
+
+
 async def test_follower_count_decrements_on_unfollow(
     client, make_user, db_session, redis_conn
 ):

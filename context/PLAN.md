@@ -45,6 +45,7 @@ demoable system — never a half-broken one.
 - **Email-based accounts**: registration takes **email + password** (email is the login
   identifier); the **username is optional and set after registration** via `PATCH /users/me`.
 - **Hardening pass (post-1.9):** register/username conflicts return **409** (IntegrityError-safe); passwords truncated to bcrypt's 72-byte limit; feed avoids empty last page (`limit+1`); CORS origins via `settings.cors_origins`; `GET /users/{id}` now requires auth; `requirements.txt` version-pinned; frontend redirects authed users away from login/register; seed staggers timestamps.
+- **Hardening pass (post-Phase-3 review):** the cached follower count now has a self-healing **TTL** (`follower_count_ttl_seconds`) and reads clamp to ≥0, so drift recovers automatically; the `feed_stream` queue is capped via `XADD MAXLEN ~` (`feed_stream_maxlen`) so it can't grow unbounded; follow/unfollow **invalidate the follower's timeline** so feeds reflect graph changes immediately. (Deferred by design: fan-out retries/reclaim → Phase 5; feed-read pipelining + post cache → Phase 4.)
 
 ### Phase 0 checklist
 - [x] Repo layout (`backend/app`, `frontend/`, `docker-compose.yml`, `.env`)

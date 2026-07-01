@@ -10,6 +10,7 @@ from app.models import User
 from app.redis_client import get_redis
 from app.schemas.follow import FollowRequest, FollowResponse
 from app.services import celebrities as celebrities_service
+from app.services import feed as feed_service
 from app.services import follows as follows_service
 from app.services import users as users_service
 
@@ -38,6 +39,8 @@ async def follow_user(
     )
     if changed:
         await celebrities_service.change_follower_count(redis, payload.followee_id, 1)
+        # Invalidate the follower's timeline so their feed reflects the change now.
+        await redis.delete(feed_service.timeline_key(current_user.id))
     return FollowResponse(followee_id=payload.followee_id, following=True)
 
 
@@ -53,4 +56,5 @@ async def unfollow_user(
     )
     if changed:
         await celebrities_service.change_follower_count(redis, payload.followee_id, -1)
+        await redis.delete(feed_service.timeline_key(current_user.id))
     return FollowResponse(followee_id=payload.followee_id, following=False)

@@ -40,3 +40,17 @@ async def test_follow_idempotent(client, make_user):
 async def test_follow_requires_auth(client):
     r = await client.post("/follow", json={"followee_id": 1})
     assert r.status_code in (401, 403)
+
+
+async def test_follow_invalidates_follower_timeline(client, make_user, redis_conn):
+    from app.services.feed import timeline_key
+
+    viewer, vh = await make_user("inv@example.com", username="invuser")
+    await client.post("/posts", json={"content": "hi"}, headers=vh)
+    await client.get("/feed", headers=vh)  # materialize timeline
+    assert await redis_conn.exists(timeline_key(viewer["id"]))
+
+    target, _ = await make_user("invt@example.com", username="invtarget")
+    await client.post("/follow", json={"followee_id": target["id"]}, headers=vh)
+    # Timeline invalidated → next read rebuilds with the new followee.
+    assert not await redis_conn.exists(timeline_key(viewer["id"]))

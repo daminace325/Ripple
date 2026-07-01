@@ -11,10 +11,14 @@ class Settings(BaseSettings):
     # Redis home-timeline cache (Phase 2)
     timeline_max_size: int = 800
     timeline_ttl_seconds: int = 60
+    # Cap the fan-out stream so it can't grow unbounded (XACK doesn't delete).
+    feed_stream_maxlen: int = 10000
 
     # Celebrity hybrid fan-out (Phase 3)
     celebrity_threshold: int = 10000
     celebrity_cache_size: int = 800
+    # TTL lets the cached follower count self-heal from Postgres if it ever drifts.
+    follower_count_ttl_seconds: int = 3600
 
     # Auth / JWT
     jwt_secret_key: str

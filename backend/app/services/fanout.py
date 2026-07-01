@@ -22,8 +22,13 @@ FEED_GROUP = "fanout"
 
 
 async def enqueue_post(redis: Redis, post_id: int, author_id: int) -> None:
-    """Append a fan-out job to the stream. Auto-creates the stream on first write."""
-    await redis.xadd(FEED_STREAM, {"post_id": post_id, "author_id": author_id})
+    """Append a fan-out job to the stream (capped so it can't grow unbounded)."""
+    await redis.xadd(
+        FEED_STREAM,
+        {"post_id": post_id, "author_id": author_id},
+        maxlen=settings.feed_stream_maxlen,
+        approximate=True,
+    )
 
 
 async def fan_out_post(

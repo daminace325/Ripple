@@ -70,6 +70,7 @@ async def list_user_posts(
     user_id: int,
     current_user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    cursor: Annotated[int | None, Query(ge=1)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> list[PostDetail]:
     user = await users_service.get_user_by_id(session, user_id)
@@ -77,7 +78,7 @@ async def list_user_posts(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
         )
-    posts = await posts_service.get_user_posts(session, user_id, limit)
+    posts = await posts_service.get_user_posts(session, user_id, cursor, limit)
     ids = [p.id for p in posts]
     counts = await likes_service.like_counts(session, ids)
     liked = await likes_service.liked_ids(session, current_user.id, ids)

@@ -26,7 +26,7 @@ demoable system — never a half-broken one.
 | 1 — MVP + auth (fan-out-on-read) | Done | 1.1–1.15 complete: full product + likes/comments + integration tests (41 passing) |
 | 2 — Redis timelines + workers | Done | 2.1–2.6 complete: Redis-backed feed, fan-out worker + enqueue on write, timeline trimming |
 | 3 — Celebrity hybrid | Done | 3.1–3.4 complete: hybrid fan-out (classify, skip fan-out, cache, read-time merge) |
-| 4 — Optimization + benchmarks | Not started | |
+| 4 — Optimization + benchmarks | In progress | 4.1 done (keyset-cursor audit; no OFFSET); 4.2 next |
 | 5 — Fault tolerance | Not started | |
 | 6 — Observability | Not started | |
 | 7 — Packaging + deploy | Not started | |
@@ -389,10 +389,10 @@ the classic Twitter timeline scalability problem."
 ## Phase 4 — Optimization & performance (make it fast, prove it)
 **Goal:** drive latency down and throughput up, with **measured before/after numbers**.
 
-**Status:** Not started.
+**Status:** In progress — 4.1 done (keyset-cursor audit; no `OFFSET` anywhere). 4.2 next.
 
 **Sub-phases** (each an independent, self-contained chunk)
-- **4.1 — Cursor pagination audit** — ensure every list endpoint uses keyset cursors, never `OFFSET`. _Done when:_ no `OFFSET` remains on hot paths.
+- **4.1 — Cursor pagination audit** ✅ — confirmed zero `OFFSET`/`.offset()` in app code; the feed already uses keyset cursors; added keyset `cursor` pagination to `GET /users/{id}/posts` (was a bare `LIMIT`). Search/comments use bounded `LIMIT` (small result sets, no `OFFSET`). _Done when:_ no `OFFSET` remains on hot paths. _(Delivered: `posts.get_user_posts` + router take a `cursor`; 1 test; 60 total.)_
 - **4.2 — Batch hydration + post cache** — hydrate posts via `MGET`/pipelining and add a `post:{id}` cache. _Done when:_ feed hydration is one round-trip per page.
 - **4.3 — Worker batching + concurrency** — batch fan-out per follower chunk; tune worker concurrency and batch size. _Done when:_ fan-out throughput improves measurably.
 - **4.4 — DB indexing pass** — add `posts(author_id, id desc)`, `follows(follower_id)`; verify with `EXPLAIN ANALYZE`. _Done when:_ key queries use index scans.

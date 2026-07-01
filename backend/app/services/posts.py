@@ -21,14 +21,14 @@ async def get_post(session: AsyncSession, post_id: int) -> Post | None:
 
 
 async def get_user_posts(
-    session: AsyncSession, author_id: int, limit: int = 20
+    session: AsyncSession, author_id: int, cursor: int | None = None, limit: int = 20
 ) -> list[Post]:
-    result = await session.execute(
-        select(Post)
-        .where(Post.author_id == author_id)
-        .order_by(Post.id.desc())
-        .limit(limit)
-    )
+    stmt = select(Post).where(Post.author_id == author_id)
+    # Keyset (cursor) pagination: newest first, page by descending post id.
+    if cursor is not None:
+        stmt = stmt.where(Post.id < cursor)
+    stmt = stmt.order_by(Post.id.desc()).limit(limit)
+    result = await session.execute(stmt)
     return list(result.scalars().all())
 
 

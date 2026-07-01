@@ -55,3 +55,29 @@ async def test_list_user_posts_missing_user_404(client, make_user):
     _, headers = await make_user("lp2@example.com", username="lp2")
     r = await client.get("/users/999999/posts", headers=headers)
     assert r.status_code == 404
+
+
+async def test_list_user_posts_cursor_pagination(client, make_user):
+    user, headers = await make_user("cur@example.com", username="curuser")
+    ids = [
+        (await client.post("/posts", json={"content": f"p{i}"}, headers=headers)).json()[
+            "id"
+        ]
+        for i in range(5)
+    ]
+    newest = sorted(ids, reverse=True)
+
+    r1 = await client.get(
+        f"/users/{user['id']}/posts", params={"limit": 2}, headers=headers
+    )
+    page1 = [p["id"] for p in r1.json()]
+    assert page1 == newest[:2]
+
+    r2 = await client.get(
+        f"/users/{user['id']}/posts",
+        params={"limit": 2, "cursor": page1[-1]},
+        headers=headers,
+    )
+    page2 = [p["id"] for p in r2.json()]
+    assert page2 == newest[2:4]
+    assert page2[0] < page1[-1]

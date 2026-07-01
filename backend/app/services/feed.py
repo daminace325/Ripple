@@ -15,6 +15,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+import json
+from dataclasses import dataclass
+from datetime import datetime
+
 from app.config import settings
 from app.models import Follow, Post
 from app.services import celebrities as celebrities_service
@@ -22,6 +26,50 @@ from app.services import celebrities as celebrities_service
 
 def timeline_key(user_id: int) -> str:
     return f"timeline:{user_id}"
+
+
+def post_cache_key(post_id: int) -> str:
+    return f"post:{post_id}"
+
+
+@dataclass
+class HydratedPost:
+    """A feed post body (from the Redis post cache or Postgres)."""
+
+    id: int
+    content: str
+    created_at: datetime
+    author_id: int
+    author_username: str | None
+    author_display_name: str | None
+
+
+def _serialize_post(post: Post) -> str:
+    return json.dumps(
+        {
+            "id": post.id,
+            "content": post.content,
+            "created_at": post.created_at.isoformat(),
+            "author": {
+                "id": post.author.id,
+                "username": post.author.username,
+                "display_name": post.author.display_name,
+            },
+        }
+    )
+
+
+def _deserialize_post(raw: str) -> HydratedPost:
+    data = json.loads(raw)
+    author = data["author"]
+    return HydratedPost(
+        id=data["id"],
+        content=data["content"],
+        created_at=datetime.fromisoformat(data["created_at"]),
+        author_id=author["id"],
+        author_username=author["username"],
+        author_display_name=author["display_name"],
+    )
 
 
 async def _followee_ids(session: AsyncSession, user_id: int) -> list[int]:
@@ -128,13 +176,47 @@ async def get_feed_page(
 
 
 async def hydrate_posts(
-    session: AsyncSession, post_ids: list[int]
-) -> list[Post]:
-    """Fetch post rows (author eager-loaded) for the given ids, preserving order."""
+    session: AsyncSession, redis: Redis, post_ids: list[int]
+) -> list[HydratedPost]:
+    """Hydrate post bodies, preserving order. One Redis `MGET` on a warm cache.
+
+    Cache-aside: hits come from `post:{id}`; misses are batch-loaded from Postgres and
+    written back (with a TTL). Post bodies are immutable, so the only staleness is an
+    author renaming themselves, which the TTL bounds.
+    """
     if not post_ids:
         return []
-    result = await session.execute(
-        select(Post).options(selectinload(Post.author)).where(Post.id.in_(post_ids))
-    )
-    by_id = {p.id: p for p in result.scalars()}
+
+    cached = await redis.mget([post_cache_key(pid) for pid in post_ids])
+    by_id: dict[int, HydratedPost] = {}
+    missing: list[int] = []
+    for pid, raw in zip(post_ids, cached):
+        if raw is not None:
+            by_id[pid] = _deserialize_post(raw)
+        else:
+            missing.append(pid)
+
+    if missing:
+        result = await session.execute(
+            select(Post).options(selectinload(Post.author)).where(Post.id.in_(missing))
+        )
+        posts = list(result.scalars())
+        if posts:
+            async with redis.pipeline(transaction=False) as pipe:
+                for post in posts:
+                    pipe.set(
+                        post_cache_key(post.id),
+                        _serialize_post(post),
+                        ex=settings.post_cache_ttl_seconds,
+                    )
+                    by_id[post.id] = HydratedPost(
+                        id=post.id,
+                        content=post.content,
+                        created_at=post.created_at,
+                        author_id=post.author.id,
+                        author_username=post.author.username,
+                        author_display_name=post.author.display_name,
+                    )
+                await pipe.execute()
+
     return [by_id[pid] for pid in post_ids if pid in by_id]

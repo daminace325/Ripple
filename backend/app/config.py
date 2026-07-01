@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     timeline_ttl_seconds: int = 60
     # Cap the fan-out stream so it can't grow unbounded (XACK doesn't delete).
     feed_stream_maxlen: int = 10000
+    # Per-post body cache (`post:{id}`) for one-round-trip feed hydration (Phase 4.2).
+    post_cache_ttl_seconds: int = 3600
 
     # Celebrity hybrid fan-out (Phase 3)
     celebrity_threshold: int = 10000

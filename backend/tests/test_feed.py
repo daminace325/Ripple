@@ -98,3 +98,20 @@ async def test_feed_celebrity_sees_own_post_via_merge(client, make_user, monkeyp
 
     body = (await client.get("/feed", headers=sh)).json()
     assert own_post in [it["id"] for it in body["items"]]
+
+
+async def test_feed_hydration_populates_post_cache(client, make_user, redis_conn):
+    from app.services.feed import post_cache_key
+
+    _, h = await make_user("hy@example.com", username="hyuser")
+    pid = (
+        await client.post("/posts", json={"content": "cached body"}, headers=h)
+    ).json()["id"]
+
+    # Cache-aside: not cached at creation, populated by the first feed hydration.
+    assert not await redis_conn.exists(post_cache_key(pid))
+    body = (await client.get("/feed", headers=h)).json()
+    assert any(
+        it["id"] == pid and it["content"] == "cached body" for it in body["items"]
+    )
+    assert await redis_conn.exists(post_cache_key(pid))

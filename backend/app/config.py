@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     timeline_max_size: int = 800
     timeline_ttl_seconds: int = 60
 
+    # Celebrity hybrid fan-out (Phase 3)
+    celebrity_threshold: int = 10000
+
     # Auth / JWT
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"

@@ -25,7 +25,7 @@ demoable system — never a half-broken one.
 | 0 — Scaffolding | In progress (core done) | Postgres + `/healthz` live; Redis/Alembic/README deferred until needed |
 | 1 — MVP + auth (fan-out-on-read) | Done | 1.1–1.15 complete: full product + likes/comments + integration tests (41 passing) |
 | 2 — Redis timelines + workers | Done | 2.1–2.6 complete: Redis-backed feed, fan-out worker + enqueue on write, timeline trimming |
-| 3 — Celebrity hybrid | Not started | |
+| 3 — Celebrity hybrid | In progress | 3.1 done (Redis follower-count cache + celebrity threshold); 3.2 next |
 | 4 — Optimization + benchmarks | Not started | |
 | 5 — Fault tolerance | Not started | |
 | 6 — Observability | Not started | |
@@ -61,7 +61,7 @@ returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the Do
 
 ### Current state snapshot (files)
 - `backend/app/main.py` — FastAPI app; CORS for the frontend; `/healthz` pings Postgres + Redis; includes auth/users/follows/posts/feed routers; lifespan disposes the engine + Redis client
-- `backend/app/config.py` — pydantic-settings; required `DATABASE_URL` + `JWT_SECRET_KEY` (+ `redis_url`, `jwt_algorithm`, `access_token_expire_minutes`, `cors_origins`)
+- `backend/app/config.py` — pydantic-settings; required `DATABASE_URL` + `JWT_SECRET_KEY` (+ `redis_url`, `timeline_max_size`/`timeline_ttl_seconds`, `celebrity_threshold`, `jwt_algorithm`, `access_token_expire_minutes`, `cors_origins`)
 - `backend/app/redis_client.py` — shared async Redis client (`redis.asyncio`, `decode_responses=True`) + `get_redis` dependency [2.1]
 - `backend/app/db.py` — async SQLAlchemy engine + `async_sessionmaker` + `get_session()` dependency
 - `backend/app/models.py` — SQLAlchemy models (`Base`): `users` (`email` + nullable `username` + `password_hash`), `follows`, `posts`, `likes`
@@ -70,7 +70,8 @@ returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the Do
 - `backend/app/schemas/user.py` — `UserOut` (public), `MeOut` (+ email), `ProfileUpdate`; `backend/app/schemas/auth.py` — email register/login/token DTOs (`EmailStr`)
 - `backend/app/services/auth.py` — auth logic (create by email, authenticate by email, update profile)
 - `backend/app/services/users.py` — `get_user_by_id`, `search_users`, follower/following counts, `is_following`
-- `backend/app/services/follows.py` — follow/unfollow (idempotent, race-safe upsert)
+- `backend/app/services/follows.py` — follow/unfollow (idempotent, race-safe upsert; return whether a row actually changed)
+- `backend/app/services/celebrities.py` — O(1) celebrity classification: cached follower count `user:{id}:followers` (backfilled from Postgres on miss, maintained on follow/unfollow), `is_celebrity` vs `celebrity_threshold` [3.1]
 - `backend/app/services/posts.py` — create post, list a user's posts (newest-first)
 - `backend/app/services/feed.py` — home feed via Redis timeline ZSET (`timeline:{id}`, `ZREVRANGEBYSCORE` keyset), rebuild-on-miss from Postgres cached with a TTL, post hydration by id (author eager-loaded)
 - `backend/app/services/fanout.py` — fan-out: `enqueue_post` (`XADD feed_stream`) + `fan_out_post` (push post id into followers' + author's **materialized** timelines only) [2.4/2.5]
@@ -365,10 +366,10 @@ O(1) cache hits."
 **Goal:** solve the scalability flaw of pure fan-out-on-write: a user with millions of
 followers would trigger millions of writes per post. Switch to a **hybrid** model.
 
-**Status:** Not started.
+**Status:** In progress — 3.1 done (O(1) celebrity classification via a Redis-cached follower count). 3.2 next.
 
 **Sub-phases** (each an independent, self-contained chunk)
-- **3.1 — Follower counts + threshold** — maintain/lookup a follower count per user and a configurable "celebrity" threshold (e.g. > 10k). _Done when:_ a user can be classified normal vs celebrity in O(1).
+- **3.1 — Follower counts + threshold** ✅ — cached follower count in Redis (`user:{id}:followers`), backfilled from Postgres on a miss and maintained on follow/unfollow (only when the row actually changed, so idempotent follows don't double-count); `is_celebrity` compares it to `celebrity_threshold` (default 10k). _(Delivered: `services/celebrities.py`, `follows` service now returns a changed-flag, follow/unfollow router maintains the counter; 4 tests — backfill+increment, decrement, idempotent, threshold — green; 50 total.)_
 - **3.2 — Skip fan-out for celebrities** — on a celebrity post, write to Postgres but do **not** fan out to follower timelines. _Done when:_ a celebrity post triggers zero timeline writes.
 - **3.3 — Cache celebrity recent posts** — keep each celebrity's recent posts in Redis for cheap read-time access. _Done when:_ recent celebrity posts are readable without a Postgres hit.
 - **3.4 — Read-time merge** — `GET /feed` merge-sorts the precomputed `timeline:` ZSET with recent posts from followed celebrities, by time, paginated. _Done when:_ a user following both kinds sees one correct, time-ordered feed.

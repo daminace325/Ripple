@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     database_url: str
     redis_url: str = "redis://localhost:6379/0"
 
+    # Redis home-timeline cache (Phase 2)
+    timeline_max_size: int = 800
+    timeline_ttl_seconds: int = 60
+
     # Auth / JWT
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"

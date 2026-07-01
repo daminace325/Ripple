@@ -24,7 +24,7 @@ demoable system — never a half-broken one.
 |---|---|---|
 | 0 — Scaffolding | In progress (core done) | Postgres + `/healthz` live; Redis/Alembic/README deferred until needed |
 | 1 — MVP + auth (fan-out-on-read) | Done | 1.1–1.15 complete: full product + likes/comments + integration tests (41 passing) |
-| 2 — Redis timelines + workers | In progress | 2.1 done (Redis service + async client + `/healthz` ping); 2.2+ next |
+| 2 — Redis timelines + workers | In progress | 2.1–2.3 done (Redis-backed feed reads + rebuild-on-miss/TTL); worker + enqueue (2.4–2.5) next |
 | 3 — Celebrity hybrid | Not started | |
 | 4 — Optimization + benchmarks | Not started | |
 | 5 — Fault tolerance | Not started | |
@@ -62,7 +62,7 @@ returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the Do
 ### Current state snapshot (files)
 - `backend/app/main.py` — FastAPI app; CORS for the frontend; `/healthz` pings Postgres + Redis; includes auth/users/follows/posts/feed routers; lifespan disposes the engine + Redis client
 - `backend/app/config.py` — pydantic-settings; required `DATABASE_URL` + `JWT_SECRET_KEY` (+ `redis_url`, `jwt_algorithm`, `access_token_expire_minutes`, `cors_origins`)
-- `backend/app/redis_client.py` — shared async Redis client (`redis.asyncio`, `decode_responses=True`) [2.1]
+- `backend/app/redis_client.py` — shared async Redis client (`redis.asyncio`, `decode_responses=True`) + `get_redis` dependency [2.1]
 - `backend/app/db.py` — async SQLAlchemy engine + `async_sessionmaker` + `get_session()` dependency
 - `backend/app/models.py` — SQLAlchemy models (`Base`): `users` (`email` + nullable `username` + `password_hash`), `follows`, `posts`, `likes`
 - `backend/app/security.py` — bcrypt password hashing + JWT encode/decode
@@ -72,7 +72,7 @@ returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the Do
 - `backend/app/services/users.py` — `get_user_by_id`, `search_users`, follower/following counts, `is_following`
 - `backend/app/services/follows.py` — follow/unfollow (idempotent, race-safe upsert)
 - `backend/app/services/posts.py` — create post, list a user's posts (newest-first)
-- `backend/app/services/feed.py` — home feed query (own + followees, keyset cursor, author eager-loaded)
+- `backend/app/services/feed.py` — home feed via Redis timeline ZSET (`timeline:{id}`, `ZREVRANGEBYSCORE` keyset), rebuild-on-miss from Postgres cached with a TTL, post hydration by id (author eager-loaded)
 - `backend/app/routers/auth.py` — `POST /auth/register`, `POST /auth/login` (email); `backend/app/routers/users.py` — `GET /users/me`, `PATCH /users/me`, `GET /users/search`, `GET /users/{id}`, `GET /users/by-username/{username}` (profile + counts); `backend/app/routers/follows.py` — `POST`/`DELETE /follow`; `backend/app/routers/posts.py` — `POST /posts`, `GET /posts/{id}` (detail + author + likes), `GET /users/{id}/posts` (enriched, auth), `POST`/`DELETE /posts/{id}/like`; `backend/app/routers/feed.py` — `GET /feed` (items include author + like_count/liked)
 - `backend/scripts/seed.py` — demo data generator (N users, random follow graph, posts; `python -m scripts.seed`); `backend/scripts/unseed.py` — removes seeded users (`python -m scripts.unseed`)
 - `backend/alembic/` + `alembic.ini` — Alembic (async); migrations: `dcfce07fa8f2` (schema), `30f2d801d8cb` (password_hash), `53dcc349a3d9` (email + nullable username), `0be43df3a9c7` (likes), `80080e70e043` (comments)
@@ -335,12 +335,12 @@ a follow graph, posting, and a cursor-paginated home timeline."
 **Goal:** replace fan-out-on-read with **fan-out-on-write**: precompute each user's home
 timeline in Redis so feed reads are O(1) cache hits. Introduce the **queue + worker**.
 
-**Status:** In progress — 2.1 done (Redis service + async client + `/healthz` reports `redis: up`). 2.2+ next.
+**Status:** In progress — 2.1–2.3 done: the home feed now reads from a per-user Redis timeline ZSET (`ZREVRANGEBYSCORE` keyset) and rebuilds from Postgres on a cache miss/expiry (short TTL). Interim: the TTL refresh keeps feeds correct until fan-out-on-write lands; a new post appears within `timeline_ttl_seconds` (default 60). Worker + enqueue (2.4–2.5) next.
 
 **Sub-phases** (each an independent, self-contained chunk)
 - **2.1 — Redis service + client** ✅ — `redis:7-alpine` in compose (appendonly + `redis_data` volume, healthcheck), shared async client in `app/redis_client.py`, `redis_url` in config/`.env`, and the Redis ping in `/healthz`. _Done when:_ `/healthz` reports `redis: up`. _(Verified: `{"status":"ok","postgres":"up","redis":"up"}`; 41 tests still green.)_
-- **2.2 — Feed reads from Redis** — `GET /feed` reads `timeline:{current_user}` via `ZREVRANGE` and hydrates post bodies from Postgres. _Done when:_ feed reads skip the big SQL join on a cache hit.
-- **2.3 — Cache-miss fallback** — if a timeline is empty/missing, rebuild it from Postgres on the fly, then serve. _Done when:_ a cold user still gets a correct feed.
+- **2.2 — Feed reads from Redis** ✅ — `GET /feed` reads `timeline:{current_user}` via `ZREVRANGEBYSCORE` (keyset by post id) and hydrates bodies from Postgres (PK lookup + author), skipping the follow-join on a cache hit. _(Delivered: `services/feed.py` `get_timeline_page_ids`/`hydrate_posts`, `get_redis` dependency injected into the router; verified end-to-end + cursor paging on seeded data.)_
+- **2.3 — Cache-miss fallback** ✅ — on a missing/expired timeline, `rebuild_timeline` repopulates the ZSET from Postgres (capped at `timeline_max_size`, TTL `timeline_ttl_seconds`) then serves. _(Delivered: rebuild-on-miss in `get_timeline_page_ids`; a cold user gets a correct feed; tests use an isolated Redis DB flushed per test.)_
 - **2.4 — Fan-out worker process** — separate container; consumes `feed_stream` via a consumer group, loads the author's followers, pipelines `ZADD post_id` into each follower's `timeline:`. _Done when:_ the worker runs standalone and updates timelines.
 - **2.5 — Enqueue on write** — `POST /posts` writes to Postgres then `XADD` a `{post_id, author_id}` job to `feed_stream` (no inline fan-out). _Done when:_ posting enqueues a job the worker drains.
 - **2.6 — Timeline trimming** — cap each `timeline:` to ~800 entries via `ZREMRANGEBYRANK` to bound memory. _Done when:_ timelines stop growing unbounded.

@@ -7,6 +7,7 @@ in-process ``httpx`` client wired to the FastAPI app via a session dependency ov
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
@@ -19,10 +20,14 @@ from app.config import settings
 from app.db import get_session
 from app.main import app
 from app.models import Base
+from app.redis_client import get_redis
 
 _dev_url = make_url(settings.database_url)
 _test_db_name = (_dev_url.database or "postgres") + "_test"
 _test_url = _dev_url.set(database=_test_db_name)
+
+# Tests use a separate Redis logical DB (…/15) so timeline caches never touch dev data.
+_test_redis_url = settings.redis_url.rsplit("/", 1)[0] + "/15"
 
 _db_ready = False
 
@@ -64,12 +69,21 @@ async def client():
         async with TestSession() as session:
             yield session
 
+    # Isolated Redis DB, flushed per test.
+    test_redis = Redis.from_url(_test_redis_url, decode_responses=True)
+    await test_redis.flushdb()
+
+    async def _override_get_redis():
+        return test_redis
+
     app.dependency_overrides[get_session] = _override_get_session
+    app.dependency_overrides[get_redis] = _override_get_redis
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
 
     app.dependency_overrides.clear()
+    await test_redis.aclose()
     await engine.dispose()
 
 

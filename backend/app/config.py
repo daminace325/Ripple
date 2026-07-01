@@ -14,6 +14,7 @@ class Settings(BaseSettings):
 
     # Celebrity hybrid fan-out (Phase 3)
     celebrity_threshold: int = 10000
+    celebrity_cache_size: int = 800
 
     # Auth / JWT
     jwt_secret_key: str

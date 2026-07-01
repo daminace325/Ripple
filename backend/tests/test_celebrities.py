@@ -83,3 +83,37 @@ async def test_normal_post_still_enqueues(client, make_user, redis_conn, monkeyp
     before = await redis_conn.xlen(fanout.FEED_STREAM)
     await client.post("/posts", json={"content": "hi"}, headers=h)
     assert await redis_conn.xlen(fanout.FEED_STREAM) == before + 1
+
+
+async def test_celebrity_post_cached(client, make_user, redis_conn, monkeypatch):
+    monkeypatch.setattr(settings, "celebrity_threshold", 1)
+    star, sh = await make_user("cachestar@example.com", username="cachestar")
+    _, fh = await make_user("cfan@example.com", username="cfan")
+    await client.post("/follow", json={"followee_id": star["id"]}, headers=fh)
+
+    p1 = (await client.post("/posts", json={"content": "a"}, headers=sh)).json()["id"]
+    p2 = (await client.post("/posts", json={"content": "b"}, headers=sh)).json()["id"]
+
+    key = celebrities.recent_posts_key(star["id"])
+    assert await redis_conn.zcard(key) == 2
+    ids = [int(m) for m in await redis_conn.zrevrange(key, 0, -1)]
+    assert ids == [p2, p1]  # newest first
+
+
+async def test_recent_posts_backfill_on_miss(
+    client, make_user, db_session, redis_conn, monkeypatch
+):
+    # Author posts while "normal"; later classified celebrity with an empty cache.
+    author, ah = await make_user("late@example.com", username="latestar")
+    pids = [
+        (await client.post("/posts", json={"content": f"p{i}"}, headers=ah)).json()[
+            "id"
+        ]
+        for i in range(3)
+    ]
+    assert not await redis_conn.exists(celebrities.recent_posts_key(author["id"]))
+
+    got = await celebrities.get_recent_post_ids(
+        redis_conn, db_session, author["id"], limit=10
+    )
+    assert got == sorted(pids, reverse=True)

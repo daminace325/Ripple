@@ -30,3 +30,15 @@ async def get_user_posts(
         .limit(limit)
     )
     return list(result.scalars().all())
+
+
+async def get_user_post_ids(
+    session: AsyncSession, author_id: int, limit: int
+) -> list[int]:
+    result = await session.scalars(
+        select(Post.id)
+        .where(Post.author_id == author_id)
+        .order_by(Post.id.desc())
+        .limit(limit)
+    )
+    return list(result)

@@ -35,8 +35,11 @@ async def create_post(
 ) -> Post:
     post = await posts_service.create_post(session, current_user.id, payload.content)
     # Hybrid fan-out: normal authors fan out on write; celebrity posts skip fan-out
-    # (zero timeline writes) and are merged into feeds at read time instead (3.3/3.4).
-    if not await celebrities_service.is_celebrity(redis, session, current_user.id):
+    # (zero timeline writes) and go into the celebrity recent-posts cache instead,
+    # to be merged into feeds at read time (3.4).
+    if await celebrities_service.is_celebrity(redis, session, current_user.id):
+        await celebrities_service.add_recent_post(redis, current_user.id, post.id)
+    else:
         await fanout.enqueue_post(redis, post.id, current_user.id)
     return post
 

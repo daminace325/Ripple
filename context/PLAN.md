@@ -25,7 +25,7 @@ demoable system — never a half-broken one.
 | 0 — Scaffolding | In progress (core done) | Postgres + `/healthz` live; Redis/Alembic/README deferred until needed |
 | 1 — MVP + auth (fan-out-on-read) | Done | 1.1–1.15 complete: full product + likes/comments + integration tests (41 passing) |
 | 2 — Redis timelines + workers | Done | 2.1–2.6 complete: Redis-backed feed, fan-out worker + enqueue on write, timeline trimming |
-| 3 — Celebrity hybrid | In progress | 3.1–3.2 done (celebrity classification + skip fan-out on write); 3.3 next |
+| 3 — Celebrity hybrid | In progress | 3.1–3.3 done (classify + skip fan-out + recent-posts cache); read-time merge (3.4) next |
 | 4 — Optimization + benchmarks | Not started | |
 | 5 — Fault tolerance | Not started | |
 | 6 — Observability | Not started | |
@@ -71,7 +71,7 @@ returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the Do
 - `backend/app/services/auth.py` — auth logic (create by email, authenticate by email, update profile)
 - `backend/app/services/users.py` — `get_user_by_id`, `search_users`, follower/following counts, `is_following`
 - `backend/app/services/follows.py` — follow/unfollow (idempotent, race-safe upsert; return whether a row actually changed)
-- `backend/app/services/celebrities.py` — O(1) celebrity classification: cached follower count `user:{id}:followers` (backfilled from Postgres on miss, maintained on follow/unfollow), `is_celebrity` vs `celebrity_threshold` [3.1]
+- `backend/app/services/celebrities.py` — O(1) celebrity classification: cached follower count `user:{id}:followers` (backfilled from Postgres on miss, maintained on follow/unfollow), `is_celebrity` vs `celebrity_threshold`; recent-posts cache `celebrity:{id}:posts` ZSET (`add_recent_post`/`get_recent_post_ids`, backfilled on miss) [3.1/3.3]
 - `backend/app/services/posts.py` — create post, list a user's posts (newest-first)
 - `backend/app/services/feed.py` — home feed via Redis timeline ZSET (`timeline:{id}`, `ZREVRANGEBYSCORE` keyset), rebuild-on-miss from Postgres cached with a TTL, post hydration by id (author eager-loaded)
 - `backend/app/services/fanout.py` — fan-out: `enqueue_post` (`XADD feed_stream`) + `fan_out_post` (push post id into followers' + author's **materialized** timelines only) [2.4/2.5]
@@ -371,7 +371,7 @@ followers would trigger millions of writes per post. Switch to a **hybrid** mode
 **Sub-phases** (each an independent, self-contained chunk)
 - **3.1 — Follower counts + threshold** ✅ — cached follower count in Redis (`user:{id}:followers`), backfilled from Postgres on a miss and maintained on follow/unfollow (only when the row actually changed, so idempotent follows don't double-count); `is_celebrity` compares it to `celebrity_threshold` (default 10k). _(Delivered: `services/celebrities.py`, `follows` service returns a changed-flag, follow/unfollow router maintains the counter; 4 tests green.)_
 - **3.2 — Skip fan-out for celebrities** ✅ — `POST /posts` checks `is_celebrity(author)`; a celebrity post is written to Postgres but **not** enqueued to `feed_stream`, so it triggers zero timeline writes. _(Delivered in the posts router; 2 tests — celebrity post enqueues nothing, normal post still enqueues; 52 total. API-only change, no worker restart.)_
-- **3.3 — Cache celebrity recent posts** — keep each celebrity's recent posts in Redis for cheap read-time access. _Done when:_ recent celebrity posts are readable without a Postgres hit.
+- **3.3 — Cache celebrity recent posts** ✅ — each celebrity's posts go into a Redis ZSET `celebrity:{id}:posts` (trimmed to `celebrity_cache_size`), populated on write and backfilled from Postgres on a cache miss; `get_recent_post_ids` reads them newest-first with an optional keyset `max_id`. _Done when:_ recent celebrity posts are readable without a Postgres hit. _(Delivered: `celebrities.add_recent_post`/`rebuild_recent_posts`/`get_recent_post_ids`, `posts.get_user_post_ids`, router caches on celebrity post; 2 tests — cache-on-write, backfill-on-miss; 54 total.)_
 - **3.4 — Read-time merge** — `GET /feed` merge-sorts the precomputed `timeline:` ZSET with recent posts from followed celebrities, by time, paginated. _Done when:_ a user following both kinds sees one correct, time-ordered feed.
 
 **Definition of done**

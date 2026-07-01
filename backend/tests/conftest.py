@@ -49,7 +49,16 @@ async def _ensure_test_database() -> None:
 
 
 @pytest.fixture
-async def client():
+async def redis_conn():
+    # Isolated Redis logical DB, flushed per test.
+    conn = Redis.from_url(_test_redis_url, decode_responses=True)
+    await conn.flushdb()
+    yield conn
+    await conn.aclose()
+
+
+@pytest.fixture
+async def session_factory():
     global _db_ready
     if not _db_ready:
         await _ensure_test_database()
@@ -61,20 +70,25 @@ async def client():
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
 
-    TestSession = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    yield factory
+    await engine.dispose()
 
+
+@pytest.fixture
+async def db_session(session_factory):
+    async with session_factory() as session:
+        yield session
+
+
+@pytest.fixture
+async def client(session_factory, redis_conn):
     async def _override_get_session():
-        async with TestSession() as session:
+        async with session_factory() as session:
             yield session
 
-    # Isolated Redis DB, flushed per test.
-    test_redis = Redis.from_url(_test_redis_url, decode_responses=True)
-    await test_redis.flushdb()
-
     async def _override_get_redis():
-        return test_redis
+        return redis_conn
 
     app.dependency_overrides[get_session] = _override_get_session
     app.dependency_overrides[get_redis] = _override_get_redis
@@ -83,8 +97,6 @@ async def client():
         yield c
 
     app.dependency_overrides.clear()
-    await test_redis.aclose()
-    await engine.dispose()
 
 
 @pytest.fixture

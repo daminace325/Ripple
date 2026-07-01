@@ -1,11 +1,13 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.deps import get_current_user
 from app.models import Post, User
+from app.redis_client import get_redis
 from app.schemas.post import (
     CommentCreate,
     CommentOut,
@@ -15,6 +17,7 @@ from app.schemas.post import (
     PostOut,
 )
 from app.services import comments as comments_service
+from app.services import fanout
 from app.services import likes as likes_service
 from app.services import posts as posts_service
 from app.services import users as users_service
@@ -27,8 +30,11 @@ async def create_post(
     payload: PostCreate,
     current_user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[Redis, Depends(get_redis)],
 ) -> Post:
-    return await posts_service.create_post(session, current_user.id, payload.content)
+    post = await posts_service.create_post(session, current_user.id, payload.content)
+    await fanout.enqueue_post(redis, post.id, current_user.id)
+    return post
 
 
 @router.get("/posts/{post_id}", response_model=PostDetail)

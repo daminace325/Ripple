@@ -49,5 +49,7 @@ async def fan_out_post(
         for key, materialized in zip(keys, exists_flags):
             if materialized:
                 pipe.zadd(key, {str(post_id): float(post_id)})
+                # Trim to the newest `timeline_max_size` ids to bound memory (2.6).
+                pipe.zremrangebyrank(key, 0, -(settings.timeline_max_size + 1))
                 pipe.expire(key, settings.timeline_ttl_seconds)
         await pipe.execute()

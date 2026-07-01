@@ -1,3 +1,4 @@
+from app.config import settings
 from app.services import fanout
 from app.services.feed import timeline_key
 
@@ -73,3 +74,27 @@ async def test_fan_out_reaches_author_own_timeline(
 
     members = await redis_conn.zrange(timeline_key(author["id"]), 0, -1)
     assert str(pid) in members
+
+
+async def test_timeline_trimmed_to_max_size(
+    client, make_user, db_session, redis_conn, monkeypatch
+):
+    monkeypatch.setattr(settings, "timeline_max_size", 3)
+    author, ah = await make_user("tr@example.com", username="trimmer")
+
+    # Materialize the author's own timeline, then fan out several posts.
+    await client.post("/posts", json={"content": "seed"}, headers=ah)
+    await client.get("/feed", headers=ah)
+
+    pids = []
+    for i in range(5):
+        pid = (
+            await client.post("/posts", json={"content": f"p{i}"}, headers=ah)
+        ).json()["id"]
+        pids.append(pid)
+        await fanout.fan_out_post(db_session, redis_conn, pid, author["id"])
+
+    key = timeline_key(author["id"])
+    assert await redis_conn.zcard(key) == 3
+    kept = sorted(int(m) for m in await redis_conn.zrange(key, 0, -1))
+    assert kept == sorted(pids)[-3:]  # newest 3 retained

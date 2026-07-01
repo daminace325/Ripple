@@ -24,7 +24,7 @@ demoable system — never a half-broken one.
 |---|---|---|
 | 0 — Scaffolding | In progress (core done) | Postgres + `/healthz` live; Redis/Alembic/README deferred until needed |
 | 1 — MVP + auth (fan-out-on-read) | Done | 1.1–1.15 complete: full product + likes/comments + integration tests (41 passing) |
-| 2 — Redis timelines + workers | In progress | 2.1–2.5 done (Redis feed + fan-out worker + enqueue on write); trimming (2.6) next |
+| 2 — Redis timelines + workers | Done | 2.1–2.6 complete: Redis-backed feed, fan-out worker + enqueue on write, timeline trimming |
 | 3 — Celebrity hybrid | Not started | |
 | 4 — Optimization + benchmarks | Not started | |
 | 5 — Fault tolerance | Not started | |
@@ -337,7 +337,7 @@ a follow graph, posting, and a cursor-paginated home timeline."
 **Goal:** replace fan-out-on-read with **fan-out-on-write**: precompute each user's home
 timeline in Redis so feed reads are O(1) cache hits. Introduce the **queue + worker**.
 
-**Status:** In progress — 2.1–2.5 done: feed reads from a Redis timeline ZSET (rebuild-on-miss/TTL), and posting is now **fan-out-on-write** — `POST /posts` enqueues a job on `feed_stream` and a separate worker process pushes the post into followers' (+ the author's) materialized timelines. Interim TTL remains a safety net for cold/inactive timelines. Trimming (2.6) next.
+**Status:** Done — 2.1–2.6 complete: feed reads from a Redis timeline ZSET (rebuild-on-miss/TTL); posting is **fan-out-on-write** (`POST /posts` → `feed_stream` → worker pushes into followers' + author's materialized timelines); timelines are trimmed to `timeline_max_size`. Interim TTL remains a safety net for cold/inactive timelines. Ready for Phase 3.
 
 **Sub-phases** (each an independent, self-contained chunk)
 - **2.1 — Redis service + client** ✅ — `redis:7-alpine` in compose (appendonly + `redis_data` volume, healthcheck), shared async client in `app/redis_client.py`, `redis_url` in config/`.env`, and the Redis ping in `/healthz`. _Done when:_ `/healthz` reports `redis: up`. _(Verified: `{"status":"ok","postgres":"up","redis":"up"}`.)_
@@ -345,9 +345,7 @@ timeline in Redis so feed reads are O(1) cache hits. Introduce the **queue + wor
 - **2.3 — Cache-miss fallback** ✅ — on a missing/expired timeline, `rebuild_timeline` repopulates the ZSET from Postgres (capped at `timeline_max_size`, TTL `timeline_ttl_seconds`) then serves. _(Delivered: rebuild-on-miss; tests use an isolated Redis DB flushed per test.)_
 - **2.4 — Fan-out worker process** ✅ — `backend/worker/main.py` runs as a separate venv process (compose service is a Phase 7 packaging concern); consumes `feed_stream` via a consumer group (`XREADGROUP` → `fan_out_post` → `XACK`), pushing `ZADD post_id` into followers' + the author's **materialized** timelines (cold ones rebuild on read, never partially created). _(Verified: worker created the group, fanned post 509 into `timeline:95`, `XPENDING`=0.)_
 - **2.5 — Enqueue on write** ✅ — `POST /posts` writes to Postgres then `XADD {post_id, author_id}` to `feed_stream` (no inline fan-out). _(Delivered: `services/fanout.enqueue_post` + router wiring; 4 fan-out tests — enqueue, push-to-materialized, cold-skip+rebuild, author-own — all green; 45 tests total.)_
-- **2.4 — Fan-out worker process** — separate container; consumes `feed_stream` via a consumer group, loads the author's followers, pipelines `ZADD post_id` into each follower's `timeline:`. _Done when:_ the worker runs standalone and updates timelines.
-- **2.5 — Enqueue on write** — `POST /posts` writes to Postgres then `XADD` a `{post_id, author_id}` job to `feed_stream` (no inline fan-out). _Done when:_ posting enqueues a job the worker drains.
-- **2.6 — Timeline trimming** — cap each `timeline:` to ~800 entries via `ZREMRANGEBYRANK` to bound memory. _Done when:_ timelines stop growing unbounded.
+- **2.6 — Timeline trimming** ✅ — after each fan-out `ZADD`, `ZREMRANGEBYRANK key 0 -(timeline_max_size+1)` keeps only the newest `timeline_max_size` (800) ids, bounding memory. _(Delivered in `fan_out_post`; a small-cap test verifies size stays bounded and the newest are kept; 46 tests green.)_
 
 **Definition of done**
 - Posting a message causes it to appear in all followers' feeds within ~1s.

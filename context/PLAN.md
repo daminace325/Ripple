@@ -23,7 +23,7 @@ demoable system — never a half-broken one.
 | Phase | Status | Notes |
 |---|---|---|
 | 0 — Scaffolding | In progress (core done) | Postgres + `/healthz` live; Redis/Alembic/README deferred until needed |
-| 1 — MVP + auth (fan-out-on-read) | In progress | 1.1–1.13 done + likes + comments; integration tests next (1.15) |
+| 1 — MVP + auth (fan-out-on-read) | Done | 1.1–1.15 complete: full product + likes/comments + integration tests (41 passing) |
 | 2 — Redis timelines + workers | Not started | Redis is introduced here, not in Phase 0 |
 | 3 — Celebrity hybrid | Not started | |
 | 4 — Optimization + benchmarks | Not started | |
@@ -75,7 +75,8 @@ returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the Do
 - `backend/app/routers/auth.py` — `POST /auth/register`, `POST /auth/login` (email); `backend/app/routers/users.py` — `GET /users/me`, `PATCH /users/me`, `GET /users/search`, `GET /users/{id}`, `GET /users/by-username/{username}` (profile + counts); `backend/app/routers/follows.py` — `POST`/`DELETE /follow`; `backend/app/routers/posts.py` — `POST /posts`, `GET /posts/{id}` (detail + author + likes), `GET /users/{id}/posts` (enriched, auth), `POST`/`DELETE /posts/{id}/like`; `backend/app/routers/feed.py` — `GET /feed` (items include author + like_count/liked)
 - `backend/scripts/seed.py` — demo data generator (N users, random follow graph, posts; `python -m scripts.seed`); `backend/scripts/unseed.py` — removes seeded users (`python -m scripts.unseed`)
 - `backend/alembic/` + `alembic.ini` — Alembic (async); migrations: `dcfce07fa8f2` (schema), `30f2d801d8cb` (password_hash), `53dcc349a3d9` (email + nullable username), `0be43df3a9c7` (likes), `80080e70e043` (comments)
-- `backend/requirements.txt` — fastapi, uvicorn[standard], sqlalchemy[asyncio], asyncpg, pydantic-settings, alembic, bcrypt, pyjwt, email-validator (version-pinned)
+- `backend/requirements.txt` — fastapi, uvicorn[standard], sqlalchemy[asyncio], asyncpg, pydantic-settings, alembic, bcrypt, pyjwt, email-validator (version-pinned); test deps pytest, pytest-asyncio, httpx
+- `backend/tests/` + `pytest.ini` — pytest + httpx integration suite (conftest fixtures + 7 modules, 41 tests); runs against an auto-created `<db>_test` database with per-test schema rebuild
 - `docker-compose.yml` — `postgres:16-alpine`, `env_file: backend/.env`, healthcheck
 - `frontend/` — Next.js app: `lib/api.ts` (typed client), `lib/auth.tsx` (auth context); `app/login`, `app/register`; route group `app/(app)/` (Home/Explore/Profile/Settings/`p/[id]` post detail) with sidebar; `components/` (Sidebar/PostCard/Composer/FollowButton/UserCard/LikeButton/Avatar); `.env.local` sets `NEXT_PUBLIC_API_BASE_URL`
 
@@ -294,7 +295,7 @@ user:{id}:followers  -> (optional) cached follower count
 **Goal:** a fully working social feed with the *simplest correct* design — **no Redis
 timelines, no workers yet.** The home feed is built by querying Postgres directly.
 
-**Status:** In progress — 1.1–1.9 done (backend + Next.js UI: register/login/feed/compose/follow); hardening pass done (409 conflicts, bcrypt 72-byte cap, feed pagination, CORS config, pinned deps); UI polish (Inter font + avatars) done; likes done (1.12); post detail done (1.13); comments done (1.14); integration tests next (1.15, gate before Phase 2).
+**Status:** Done — 1.1–1.9 done (backend + Next.js UI: register/login/feed/compose/follow); hardening pass done (409 conflicts, bcrypt 72-byte cap, feed pagination, CORS config, pinned deps); UI polish (Inter font + avatars) done; likes done (1.12); post detail done (1.13); comments done (1.14); integration tests green (1.15 — 41 pytest+httpx tests). Phase 1 complete; ready for Phase 2.
 
 > Why naive first: this gives us a correct baseline to demo and to **benchmark**, so the
 > later optimizations have real before/after numbers. This "I started simple, measured,
@@ -314,7 +315,7 @@ timelines, no workers yet.** The home feed is built by querying Postgres directl
 - **1.12 — Likes** ✅ — `likes(user_id, post_id)` table (+`ix_likes_post_id`); `POST`/`DELETE /posts/{id}/like` (idempotent via ON CONFLICT, like the follow pattern); feed items enriched with `like_count` + `liked`; optimistic like button. DB-counted now, Redis counters in Phase 4.
 - **1.13 — Post detail page** ✅ — `GET /posts/{id}` (auth; author + `like_count` + `liked`, 404 if missing); frontend `/p/{id}` route reusing `PostCard` (centered boxed card); cards are whole-card clickable via a stretched-link overlay; `GET /users/{id}/posts` enriched to match. _Done when:_ a single post opens with its stats.
 - **1.14 — Comments** ✅ — `comments(id, post_id, author_id, content)` (single-level, `ix_comments_post_id_id`); `GET`/`POST /posts/{id}/comments` (auth, 404 if post missing); detail/feed/profile enriched with `comment_count`; reply box + list on the detail page. _Done when:_ users can comment and counts show.
-- **1.15 — Integration tests** — pytest + httpx across auth/users/follow/posts/feed + likes/comments; the gate before Phase 2. _Done when:_ `pytest` is green.
+- **1.15 — Integration tests** ✅ — pytest + httpx across auth/users/follow/posts/feed + likes/comments (41 tests). Dedicated `<db>_test` database (auto-created), schema rebuilt per test, `get_session` overridden, in-process `ASGITransport` client. _Done when:_ `pytest` is green. _(Delivered: `backend/tests/` (conftest + 7 test modules), `pytest.ini` (asyncio auto), test deps pinned in requirements.)_
 
 **Definition of done**
 - I can: register, log in, follow people, post, and see a correct home feed in the browser.

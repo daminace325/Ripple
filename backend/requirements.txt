@@ -7,3 +7,8 @@ alembic==1.18.4
 bcrypt==5.0.0
 pyjwt==2.13.0
 email-validator==2.3.0
+
+# Tests
+pytest==8.4.1
+pytest-asyncio==1.0.0
+httpx==0.28.1

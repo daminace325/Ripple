@@ -25,7 +25,7 @@ demoable system — never a half-broken one.
 | 0 — Scaffolding | In progress (core done) | Postgres + `/healthz` live; Redis/Alembic/README deferred until needed |
 | 1 — MVP + auth (fan-out-on-read) | Done | 1.1–1.15 complete: full product + likes/comments + integration tests (41 passing) |
 | 2 — Redis timelines + workers | Done | 2.1–2.6 complete: Redis-backed feed, fan-out worker + enqueue on write, timeline trimming |
-| 3 — Celebrity hybrid | In progress | 3.1 done (Redis follower-count cache + celebrity threshold); 3.2 next |
+| 3 — Celebrity hybrid | In progress | 3.1–3.2 done (celebrity classification + skip fan-out on write); 3.3 next |
 | 4 — Optimization + benchmarks | Not started | |
 | 5 — Fault tolerance | Not started | |
 | 6 — Observability | Not started | |
@@ -366,11 +366,11 @@ O(1) cache hits."
 **Goal:** solve the scalability flaw of pure fan-out-on-write: a user with millions of
 followers would trigger millions of writes per post. Switch to a **hybrid** model.
 
-**Status:** In progress — 3.1 done (O(1) celebrity classification via a Redis-cached follower count). 3.2 next.
+**Status:** In progress — 3.1–3.2 done: celebrities are classified in O(1) (cached follower count), and their posts **skip fan-out** entirely (no `feed_stream` job, zero timeline writes). Interim: followers still see celebrity posts via the TTL rebuild (Postgres includes followees' posts) until read-time merge (3.4). 3.3 next.
 
 **Sub-phases** (each an independent, self-contained chunk)
-- **3.1 — Follower counts + threshold** ✅ — cached follower count in Redis (`user:{id}:followers`), backfilled from Postgres on a miss and maintained on follow/unfollow (only when the row actually changed, so idempotent follows don't double-count); `is_celebrity` compares it to `celebrity_threshold` (default 10k). _(Delivered: `services/celebrities.py`, `follows` service now returns a changed-flag, follow/unfollow router maintains the counter; 4 tests — backfill+increment, decrement, idempotent, threshold — green; 50 total.)_
-- **3.2 — Skip fan-out for celebrities** — on a celebrity post, write to Postgres but do **not** fan out to follower timelines. _Done when:_ a celebrity post triggers zero timeline writes.
+- **3.1 — Follower counts + threshold** ✅ — cached follower count in Redis (`user:{id}:followers`), backfilled from Postgres on a miss and maintained on follow/unfollow (only when the row actually changed, so idempotent follows don't double-count); `is_celebrity` compares it to `celebrity_threshold` (default 10k). _(Delivered: `services/celebrities.py`, `follows` service returns a changed-flag, follow/unfollow router maintains the counter; 4 tests green.)_
+- **3.2 — Skip fan-out for celebrities** ✅ — `POST /posts` checks `is_celebrity(author)`; a celebrity post is written to Postgres but **not** enqueued to `feed_stream`, so it triggers zero timeline writes. _(Delivered in the posts router; 2 tests — celebrity post enqueues nothing, normal post still enqueues; 52 total. API-only change, no worker restart.)_
 - **3.3 — Cache celebrity recent posts** — keep each celebrity's recent posts in Redis for cheap read-time access. _Done when:_ recent celebrity posts are readable without a Postgres hit.
 - **3.4 — Read-time merge** — `GET /feed` merge-sorts the precomputed `timeline:` ZSET with recent posts from followed celebrities, by time, paginated. _Done when:_ a user following both kinds sees one correct, time-ordered feed.
 

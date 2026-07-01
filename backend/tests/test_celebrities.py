@@ -1,5 +1,6 @@
 from app.config import settings
 from app.services import celebrities
+from app.services import fanout
 
 
 async def test_follower_count_backfills_then_increments(
@@ -58,3 +59,27 @@ async def test_is_celebrity_threshold(
         await client.post("/follow", json={"followee_id": target["id"]}, headers=h)
 
     assert await celebrities.is_celebrity(redis_conn, db_session, target["id"])
+
+
+async def test_celebrity_post_skips_fanout(
+    client, make_user, redis_conn, monkeypatch
+):
+    monkeypatch.setattr(settings, "celebrity_threshold", 1)
+    star, sh = await make_user("bigstar@example.com", username="bigstar")
+    _, fh = await make_user("fan@example.com", username="fanuser")
+    await client.post("/follow", json={"followee_id": star["id"]}, headers=fh)
+
+    # star now has 1 follower ≥ threshold(1) → celebrity → no fan-out job.
+    before = await redis_conn.xlen(fanout.FEED_STREAM)
+    r = await client.post("/posts", json={"content": "celeb post"}, headers=sh)
+    assert r.status_code == 201
+    assert await redis_conn.xlen(fanout.FEED_STREAM) == before
+
+
+async def test_normal_post_still_enqueues(client, make_user, redis_conn, monkeypatch):
+    monkeypatch.setattr(settings, "celebrity_threshold", 1)
+    _, h = await make_user("normie@example.com", username="normie")
+
+    before = await redis_conn.xlen(fanout.FEED_STREAM)
+    await client.post("/posts", json={"content": "hi"}, headers=h)
+    assert await redis_conn.xlen(fanout.FEED_STREAM) == before + 1

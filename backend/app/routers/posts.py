@@ -16,6 +16,7 @@ from app.schemas.post import (
     PostDetail,
     PostOut,
 )
+from app.services import celebrities as celebrities_service
 from app.services import comments as comments_service
 from app.services import fanout
 from app.services import likes as likes_service
@@ -33,7 +34,10 @@ async def create_post(
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> Post:
     post = await posts_service.create_post(session, current_user.id, payload.content)
-    await fanout.enqueue_post(redis, post.id, current_user.id)
+    # Hybrid fan-out: normal authors fan out on write; celebrity posts skip fan-out
+    # (zero timeline writes) and are merged into feeds at read time instead (3.3/3.4).
+    if not await celebrities_service.is_celebrity(redis, session, current_user.id):
+        await fanout.enqueue_post(redis, post.id, current_user.id)
     return post
 
 

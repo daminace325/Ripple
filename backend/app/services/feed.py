@@ -1,46 +1,72 @@
-"""Home-timeline assembly.
+"""Home-timeline assembly (hybrid fan-out).
 
-Phase 2: the home feed reads from a per-user Redis sorted set (`timeline:{user_id}`,
-member = post id, score = post id) instead of the big Postgres follow-join. On a cache miss
-or expiry the timeline is rebuilt from Postgres (the source of truth) and cached with a short
-TTL. Post bodies are always hydrated from Postgres.
+The home feed is the union of two sources, merged and sorted by post id at read time:
 
-Fan-out-on-write (a background worker that pushes new posts into follower timelines) replaces
-the TTL refresh in 2.4–2.5; trimming lands in 2.6.
+1. A per-user Redis timeline ZSET (`timeline:{id}`) holding the user's own posts plus posts
+   from the **normal** (non-celebrity) accounts they follow. It's maintained by fan-out-on-write
+   and rebuilt from Postgres on a cache miss/expiry (short TTL).
+2. Recent posts from the **celebrities** they follow (and their own, if they are a celebrity),
+   read from each celebrity's cache (`celebrity:{id}:posts`). Celebrity posts are never fanned
+   out (Phase 3.2), so they're merged in here instead — avoiding fan-out storms.
 """
 
 from redis.asyncio import Redis
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.models import Follow, Post
+from app.services import celebrities as celebrities_service
 
 
 def timeline_key(user_id: int) -> str:
     return f"timeline:{user_id}"
 
 
-async def _recent_post_ids_from_db(
-    session: AsyncSession, user_id: int, limit: int
+async def _followee_ids(session: AsyncSession, user_id: int) -> list[int]:
+    return list(
+        await session.scalars(
+            select(Follow.followee_id).where(Follow.follower_id == user_id)
+        )
+    )
+
+
+async def _classify_followees(
+    session: AsyncSession, redis: Redis, followee_ids: list[int]
+) -> tuple[list[int], list[int]]:
+    """Split followees into (normal, celebrity) using the cached follower counts."""
+    normal: list[int] = []
+    celebrity: list[int] = []
+    for fid in followee_ids:
+        if await celebrities_service.is_celebrity(redis, session, fid):
+            celebrity.append(fid)
+        else:
+            normal.append(fid)
+    return normal, celebrity
+
+
+async def _post_ids_by_authors(
+    session: AsyncSession, author_ids: list[int], limit: int
 ) -> list[int]:
-    # Posts authored by the user OR by anyone the user follows, newest first.
-    followees = select(Follow.followee_id).where(Follow.follower_id == user_id)
-    stmt = (
+    if not author_ids:
+        return []
+    result = await session.scalars(
         select(Post.id)
-        .where(or_(Post.author_id == user_id, Post.author_id.in_(followees)))
+        .where(Post.author_id.in_(author_ids))
         .order_by(Post.id.desc())
         .limit(limit)
     )
-    return list(await session.scalars(stmt))
+    return list(result)
 
 
 async def rebuild_timeline(
-    session: AsyncSession, redis: Redis, user_id: int
+    session: AsyncSession, redis: Redis, user_id: int, source_author_ids: list[int]
 ) -> None:
-    """Repopulate a user's timeline ZSET from Postgres and set a TTL."""
-    ids = await _recent_post_ids_from_db(session, user_id, settings.timeline_max_size)
+    """Repopulate a user's timeline ZSET (own + normal followees) and set a TTL."""
+    ids = await _post_ids_by_authors(
+        session, source_author_ids, settings.timeline_max_size
+    )
     key = timeline_key(user_id)
     async with redis.pipeline(transaction=True) as pipe:
         pipe.delete(key)
@@ -50,27 +76,55 @@ async def rebuild_timeline(
         await pipe.execute()
 
 
-async def get_timeline_page_ids(
+async def _timeline_page_ids(
     session: AsyncSession,
     redis: Redis,
     user_id: int,
+    normal_followee_ids: list[int],
     cursor: int | None,
     limit: int,
 ) -> list[int]:
-    """Return up to ``limit + 1`` post ids for the page (extra id signals more).
-
-    Reads the Redis timeline; rebuilds from Postgres on a cache miss/expiry.
-    """
     key = timeline_key(user_id)
     if not await redis.exists(key):
-        await rebuild_timeline(session, redis, user_id)
-
-    # Keyset pagination by descending post id (score). Exclusive upper bound past the cursor.
+        await rebuild_timeline(session, redis, user_id, [user_id, *normal_followee_ids])
     max_score = "+inf" if cursor is None else f"({cursor}"
     ids = await redis.zrevrangebyscore(
         key, max_score, "-inf", start=0, num=limit + 1
     )
     return [int(i) for i in ids]
+
+
+async def get_feed_page(
+    session: AsyncSession,
+    redis: Redis,
+    user_id: int,
+    cursor: int | None,
+    limit: int,
+) -> tuple[list[int], int | None]:
+    """Merge the timeline with followed celebrities' recent posts. Returns (ids, next_cursor)."""
+    followees = await _followee_ids(session, user_id)
+    normal, celebrity = await _classify_followees(session, redis, followees)
+
+    ids: set[int] = set(
+        await _timeline_page_ids(session, redis, user_id, normal, cursor, limit)
+    )
+
+    # Read-time merge: recent posts from followed celebrities (+ own if a celebrity).
+    celebrity_sources = list(celebrity)
+    if await celebrities_service.is_celebrity(redis, session, user_id):
+        celebrity_sources.append(user_id)
+    for cid in celebrity_sources:
+        ids.update(
+            await celebrities_service.get_recent_post_ids(
+                redis, session, cid, limit + 1, max_id=cursor
+            )
+        )
+
+    ordered = sorted(ids, reverse=True)
+    has_more = len(ordered) > limit
+    page = ordered[:limit]
+    next_cursor = page[-1] if has_more else None
+    return page, next_cursor
 
 
 async def hydrate_posts(

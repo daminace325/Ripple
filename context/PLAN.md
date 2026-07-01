@@ -25,7 +25,7 @@ demoable system — never a half-broken one.
 | 0 — Scaffolding | In progress (core done) | Postgres + `/healthz` live; Redis/Alembic/README deferred until needed |
 | 1 — MVP + auth (fan-out-on-read) | Done | 1.1–1.15 complete: full product + likes/comments + integration tests (41 passing) |
 | 2 — Redis timelines + workers | Done | 2.1–2.6 complete: Redis-backed feed, fan-out worker + enqueue on write, timeline trimming |
-| 3 — Celebrity hybrid | In progress | 3.1–3.3 done (classify + skip fan-out + recent-posts cache); read-time merge (3.4) next |
+| 3 — Celebrity hybrid | Done | 3.1–3.4 complete: hybrid fan-out (classify, skip fan-out, cache, read-time merge) |
 | 4 — Optimization + benchmarks | Not started | |
 | 5 — Fault tolerance | Not started | |
 | 6 — Observability | Not started | |
@@ -73,7 +73,7 @@ returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the Do
 - `backend/app/services/follows.py` — follow/unfollow (idempotent, race-safe upsert; return whether a row actually changed)
 - `backend/app/services/celebrities.py` — O(1) celebrity classification: cached follower count `user:{id}:followers` (backfilled from Postgres on miss, maintained on follow/unfollow), `is_celebrity` vs `celebrity_threshold`; recent-posts cache `celebrity:{id}:posts` ZSET (`add_recent_post`/`get_recent_post_ids`, backfilled on miss) [3.1/3.3]
 - `backend/app/services/posts.py` — create post, list a user's posts (newest-first)
-- `backend/app/services/feed.py` — home feed via Redis timeline ZSET (`timeline:{id}`, `ZREVRANGEBYSCORE` keyset), rebuild-on-miss from Postgres cached with a TTL, post hydration by id (author eager-loaded)
+- `backend/app/services/feed.py` — hybrid home feed: merges the Redis timeline ZSET (own + **normal** followees, rebuild-on-miss/TTL) with followed celebrities' cached recent posts at read time (`get_feed_page`), keyset-paginated by post id; post hydration by id (author eager-loaded)
 - `backend/app/services/fanout.py` — fan-out: `enqueue_post` (`XADD feed_stream`) + `fan_out_post` (push post id into followers' + author's **materialized** timelines only) [2.4/2.5]
 - `backend/worker/main.py` — fan-out worker (separate venv process); consumer group on `feed_stream`, `XREADGROUP`/`XACK`, calls `fan_out_post`; run `python -m worker.main` [2.4]
 - `backend/app/routers/auth.py` — `POST /auth/register`, `POST /auth/login` (email); `backend/app/routers/users.py` — `GET /users/me`, `PATCH /users/me`, `GET /users/search`, `GET /users/{id}`, `GET /users/by-username/{username}` (profile + counts); `backend/app/routers/follows.py` — `POST`/`DELETE /follow`; `backend/app/routers/posts.py` — `POST /posts` (enqueues fan-out), `GET /posts/{id}` (detail + author + likes), `GET /users/{id}/posts` (enriched, auth), `POST`/`DELETE /posts/{id}/like`, `GET`/`POST /posts/{id}/comments`; `backend/app/routers/feed.py` — `GET /feed` (Redis timeline; items include author + like/comment counts)
@@ -366,13 +366,13 @@ O(1) cache hits."
 **Goal:** solve the scalability flaw of pure fan-out-on-write: a user with millions of
 followers would trigger millions of writes per post. Switch to a **hybrid** model.
 
-**Status:** In progress — 3.1–3.2 done: celebrities are classified in O(1) (cached follower count), and their posts **skip fan-out** entirely (no `feed_stream` job, zero timeline writes). Interim: followers still see celebrity posts via the TTL rebuild (Postgres includes followees' posts) until read-time merge (3.4). 3.3 next.
+**Status:** Done — 3.1–3.4 complete. The feed is a **hybrid**: the Redis timeline holds each user's own posts + posts from the **normal** accounts they follow (fan-out-on-write); a celebrity's posts skip fan-out and are **merged at read time** from their cache. A user following both kinds gets one correct, time-ordered feed. Ready for Phase 4.
 
 **Sub-phases** (each an independent, self-contained chunk)
 - **3.1 — Follower counts + threshold** ✅ — cached follower count in Redis (`user:{id}:followers`), backfilled from Postgres on a miss and maintained on follow/unfollow (only when the row actually changed, so idempotent follows don't double-count); `is_celebrity` compares it to `celebrity_threshold` (default 10k). _(Delivered: `services/celebrities.py`, `follows` service returns a changed-flag, follow/unfollow router maintains the counter; 4 tests green.)_
 - **3.2 — Skip fan-out for celebrities** ✅ — `POST /posts` checks `is_celebrity(author)`; a celebrity post is written to Postgres but **not** enqueued to `feed_stream`, so it triggers zero timeline writes. _(Delivered in the posts router; 2 tests — celebrity post enqueues nothing, normal post still enqueues; 52 total. API-only change, no worker restart.)_
 - **3.3 — Cache celebrity recent posts** ✅ — each celebrity's posts go into a Redis ZSET `celebrity:{id}:posts` (trimmed to `celebrity_cache_size`), populated on write and backfilled from Postgres on a cache miss; `get_recent_post_ids` reads them newest-first with an optional keyset `max_id`. _Done when:_ recent celebrity posts are readable without a Postgres hit. _(Delivered: `celebrities.add_recent_post`/`rebuild_recent_posts`/`get_recent_post_ids`, `posts.get_user_post_ids`, router caches on celebrity post; 2 tests — cache-on-write, backfill-on-miss; 54 total.)_
-- **3.4 — Read-time merge** — `GET /feed` merge-sorts the precomputed `timeline:` ZSET with recent posts from followed celebrities, by time, paginated. _Done when:_ a user following both kinds sees one correct, time-ordered feed.
+- **3.4 — Read-time merge** ✅ — `get_feed_page` classifies followees (normal vs celebrity), reads the timeline (own + normal followees) and unions it with recent posts from followed celebrities (+ the viewer's own cache if they're a celebrity), sorted by id and keyset-paginated. The timeline rebuild now **excludes** celebrities (they come only from the merge), so no double-counting. _Done when:_ a user following both kinds sees one correct, time-ordered feed. _(Delivered: `services/feed.py` rewrite + router; 2 tests — mixed feed ordering, celebrity-sees-own-via-merge; 56 total. API-only — the worker uses only `timeline_key`, unchanged.)_
 
 **Definition of done**
 - A celebrity posting does **not** cause a fan-out storm.

@@ -24,13 +24,9 @@ async def get_feed(
     cursor: Annotated[int | None, Query(ge=1)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> FeedPage:
-    page_ids = await feed_service.get_timeline_page_ids(
+    page_ids, next_cursor = await feed_service.get_feed_page(
         session, redis, current_user.id, cursor, limit
     )
-    has_more = len(page_ids) > limit
-    page_ids = page_ids[:limit]
-    next_cursor = page_ids[-1] if has_more else None
-
     posts = await feed_service.hydrate_posts(session, page_ids)
     ids = [p.id for p in posts]
     counts = await likes_service.like_counts(session, ids)

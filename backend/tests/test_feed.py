@@ -50,3 +50,51 @@ async def test_feed_pagination(client, make_user):
 async def test_feed_requires_auth(client):
     r = await client.get("/feed")
     assert r.status_code in (401, 403)
+
+
+async def test_feed_merges_normal_and_celebrity(client, make_user, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "celebrity_threshold", 2)
+    _, vh = await make_user("viewer2@example.com", username="viewer2")
+    normal, nh = await make_user("norm2@example.com", username="normal2")
+    star, sh = await make_user("star2@example.com", username="startwo")
+    _, eh = await make_user("extra2@example.com", username="extra2")
+
+    # star: 2 followers → celebrity; normal: 1 follower → not.
+    await client.post("/follow", json={"followee_id": star["id"]}, headers=vh)
+    await client.post("/follow", json={"followee_id": star["id"]}, headers=eh)
+    await client.post("/follow", json={"followee_id": normal["id"]}, headers=vh)
+
+    normal_post = (
+        await client.post("/posts", json={"content": "from normal"}, headers=nh)
+    ).json()["id"]
+    celeb_post = (
+        await client.post("/posts", json={"content": "from celeb"}, headers=sh)
+    ).json()["id"]
+
+    body = (await client.get("/feed", headers=vh)).json()
+    ids = [it["id"] for it in body["items"]]
+    assert normal_post in ids  # via timeline (rebuild)
+    assert celeb_post in ids  # via read-time merge
+    assert ids[0] == celeb_post  # newest first
+
+
+async def test_feed_celebrity_sees_own_post_via_merge(client, make_user, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "celebrity_threshold", 1)
+    star, sh = await make_user("ownceleb@example.com", username="ownceleb")
+    _, fh = await make_user("f@example.com", username="ownfan")
+    await client.post("/follow", json={"followee_id": star["id"]}, headers=fh)
+
+    # Materialize the timeline first (no fan-out of celebrity posts into it).
+    await client.post("/posts", json={"content": "seed"}, headers=sh)
+    await client.get("/feed", headers=sh)
+
+    own_post = (
+        await client.post("/posts", json={"content": "mine"}, headers=sh)
+    ).json()["id"]
+
+    body = (await client.get("/feed", headers=sh)).json()
+    assert own_post in [it["id"] for it in body["items"]]

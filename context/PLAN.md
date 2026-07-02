@@ -26,7 +26,7 @@ demoable system — never a half-broken one.
 | 1 — MVP + auth (fan-out-on-read) | Done | 1.1–1.15 complete: full product + likes/comments + integration tests (41 passing) |
 | 2 — Redis timelines + workers | Done | 2.1–2.6 complete: Redis-backed feed, fan-out worker + enqueue on write, timeline trimming |
 | 3 — Celebrity hybrid | Done | 3.1–3.4 complete: hybrid fan-out (classify, skip fan-out, cache, read-time merge) |
-| 4 — Optimization + benchmarks | In progress | 4.1–4.2 done (keyset audit; MGET post-cache hydration); 4.3 next |
+| 4 — Optimization + benchmarks | In progress | 4.1–4.3 done (keyset audit; MGET hydration; batched fan-out + concurrent worker); 4.4 next |
 | 5 — Fault tolerance | Not started | |
 | 6 — Observability | Not started | |
 | 7 — Packaging + deploy | Not started | |
@@ -62,7 +62,7 @@ returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the Do
 
 ### Current state snapshot (files)
 - `backend/app/main.py` — FastAPI app; CORS for the frontend; `/healthz` pings Postgres + Redis; includes auth/users/follows/posts/feed routers; lifespan disposes the engine + Redis client
-- `backend/app/config.py` — pydantic-settings; required `DATABASE_URL` + `JWT_SECRET_KEY` (+ `redis_url`, `timeline_max_size`/`timeline_ttl_seconds`, `celebrity_threshold`, `jwt_algorithm`, `access_token_expire_minutes`, `cors_origins`)
+- `backend/app/config.py` — pydantic-settings; required `DATABASE_URL` + `JWT_SECRET_KEY` (+ `redis_url`, `timeline_max_size`/`timeline_ttl_seconds`, `feed_stream_maxlen`, `post_cache_ttl_seconds`, `fanout_chunk_size`/`worker_batch_size`/`worker_block_ms`, `celebrity_threshold`/`celebrity_cache_size`, `follower_count_ttl_seconds`, `jwt_algorithm`, `access_token_expire_minutes`, `cors_origins`)
 - `backend/app/redis_client.py` — shared async Redis client (`redis.asyncio`, `decode_responses=True`) + `get_redis` dependency [2.1]
 - `backend/app/db.py` — async SQLAlchemy engine + `async_sessionmaker` + `get_session()` dependency
 - `backend/app/models.py` — SQLAlchemy models (`Base`): `users` (`email` + nullable `username` + `password_hash`), `follows`, `posts`, `likes`
@@ -75,8 +75,8 @@ returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the Do
 - `backend/app/services/celebrities.py` — O(1) celebrity classification: cached follower count `user:{id}:followers` (backfilled from Postgres on miss, maintained on follow/unfollow), `is_celebrity` vs `celebrity_threshold`; recent-posts cache `celebrity:{id}:posts` ZSET (`add_recent_post`/`get_recent_post_ids`, backfilled on miss) [3.1/3.3]
 - `backend/app/services/posts.py` — create post, list a user's posts (newest-first)
 - `backend/app/services/feed.py` — hybrid home feed: merges the Redis timeline ZSET (own + **normal** followees, rebuild-on-miss/TTL) with followed celebrities' cached recent posts at read time (`get_feed_page`), keyset-paginated by post id; post-body hydration via a Redis `post:{id}` cache (`MGET` cache-aside, one round-trip on a warm cache)
-- `backend/app/services/fanout.py` — fan-out: `enqueue_post` (`XADD feed_stream`) + `fan_out_post` (push post id into followers' + author's **materialized** timelines only) [2.4/2.5]
-- `backend/worker/main.py` — fan-out worker (separate venv process); consumer group on `feed_stream`, `XREADGROUP`/`XACK`, calls `fan_out_post`; run `python -m worker.main` [2.4]
+- `backend/app/services/fanout.py` — fan-out: `enqueue_post` (`XADD feed_stream`, capped via `MAXLEN ~`) + `fan_out_post` (push post id into followers' + author's **materialized** timelines only, in bounded `fanout_chunk_size` chunks) [2.4/2.5, 4.3]
+- `backend/worker/main.py` — fan-out worker (separate venv process); consumer group on `feed_stream`, `XREADGROUP` batches (`worker_batch_size`/`worker_block_ms`) processed **concurrently** (`asyncio.gather`) → `fan_out_post` → per-message `XACK`; run `python -m worker.main` [2.4, 4.3]
 - `backend/app/routers/auth.py` — `POST /auth/register`, `POST /auth/login` (email); `backend/app/routers/users.py` — `GET /users/me`, `PATCH /users/me`, `GET /users/search`, `GET /users/{id}`, `GET /users/by-username/{username}` (profile + counts); `backend/app/routers/follows.py` — `POST`/`DELETE /follow`; `backend/app/routers/posts.py` — `POST /posts` (enqueues fan-out), `GET /posts/{id}` (detail + author + likes), `GET /users/{id}/posts` (enriched, auth), `POST`/`DELETE /posts/{id}/like`, `GET`/`POST /posts/{id}/comments`; `backend/app/routers/feed.py` — `GET /feed` (Redis timeline; items include author + like/comment counts)
 - `backend/scripts/seed.py` — demo data generator (N users, random follow graph, posts; `python -m scripts.seed`); `backend/scripts/unseed.py` — removes seeded users (`python -m scripts.unseed`)
 - `backend/alembic/` + `alembic.ini` — Alembic (async); migrations: `dcfce07fa8f2` (schema), `30f2d801d8cb` (password_hash), `53dcc349a3d9` (email + nullable username), `0be43df3a9c7` (likes), `80080e70e043` (comments)
@@ -391,12 +391,12 @@ the classic Twitter timeline scalability problem."
 ## Phase 4 — Optimization & performance (make it fast, prove it)
 **Goal:** drive latency down and throughput up, with **measured before/after numbers**.
 
-**Status:** In progress — 4.1–4.2 done (keyset-cursor audit; `MGET` post-cache hydration). 4.3 next.
+**Status:** In progress — 4.1–4.3 done (keyset-cursor audit; `MGET` post-cache hydration; batched fan-out + concurrent worker). 4.4 next.
 
 **Sub-phases** (each an independent, self-contained chunk)
 - **4.1 — Cursor pagination audit** ✅ — confirmed zero `OFFSET`/`.offset()` in app code; the feed already uses keyset cursors; added keyset `cursor` pagination to `GET /users/{id}/posts` (was a bare `LIMIT`). Search/comments use bounded `LIMIT` (small result sets, no `OFFSET`). _Done when:_ no `OFFSET` remains on hot paths. _(Delivered: `posts.get_user_posts` + router take a `cursor`; 1 test; 60 total.)_
 - **4.2 — Batch hydration + post cache** ✅ — feed post bodies are hydrated from a Redis `post:{id}` cache via a single `MGET` (cache-aside: misses batch-load from Postgres and write back with `post_cache_ttl_seconds`). On a warm cache, hydration is one Redis round-trip and zero Postgres. Post bodies are immutable, so the only staleness is an author renaming (bounded by TTL). _Done when:_ feed hydration is one round-trip per page. _(Delivered: `feed.hydrate_posts` rewrite + `HydratedPost`, router builds items from it; 1 test; 61 total. Like/comment counts still batch-query Postgres — a separate Redis-counter optimization.)_
-- **4.3 — Worker batching + concurrency** — batch fan-out per follower chunk; tune worker concurrency and batch size. _Done when:_ fan-out throughput improves measurably.
+- **4.3 — Worker batching + concurrency** ✅ — `fan_out_post` pushes to follower timelines in bounded chunks (`fanout_chunk_size`, 500) so a high-follower author never builds one giant pipeline; the worker reads stream batches (`XREADGROUP COUNT worker_batch_size BLOCK worker_block_ms`) and processes each batch **concurrently** via `asyncio.gather` (overlapping DB/Redis I/O), acking per message. _Done when:_ fan-out throughput improves measurably. _(Delivered: `services/fanout.py` chunking + `worker/main.py` batch/concurrency + config knobs; 1 chunking-correctness test; 62 total. Needs a worker restart to take effect.)_
 - **4.4 — DB indexing pass** — add `posts(author_id, id desc)`, `follows(follower_id)`; verify with `EXPLAIN ANALYZE`. _Done when:_ key queries use index scans.
 - **4.5 — Connection pooling** — tune asyncpg and Redis pool sizes for target concurrency. _Done when:_ pools are sized and stable under load.
 - **4.6 — Load-test harness** — locust or custom asyncio driver at increasing concurrency. _Done when:_ a repeatable load test exists.

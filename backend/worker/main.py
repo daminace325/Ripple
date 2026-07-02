@@ -16,6 +16,7 @@ import socket
 
 from redis.exceptions import ResponseError
 
+from app.config import settings
 from app.db import SessionLocal
 from app.redis_client import redis_client
 from app.services import fanout
@@ -46,11 +47,15 @@ async def ensure_group() -> None:
 
 
 async def _process(msg_id: str, fields: dict[str, str]) -> None:
-    post_id = int(fields["post_id"])
-    author_id = int(fields["author_id"])
-    async with SessionLocal() as session:
-        await fanout.fan_out_post(session, redis_client, post_id, author_id)
-    await redis_client.xack(fanout.FEED_STREAM, fanout.FEED_GROUP, msg_id)
+    try:
+        post_id = int(fields["post_id"])
+        author_id = int(fields["author_id"])
+        async with SessionLocal() as session:
+            await fanout.fan_out_post(session, redis_client, post_id, author_id)
+        await redis_client.xack(fanout.FEED_STREAM, fanout.FEED_GROUP, msg_id)
+    except Exception:
+        # Left unacked on purpose; Phase 5 adds reclaim + dead-letter.
+        logger.exception("fan-out failed for message %s", msg_id)
 
 
 async def run() -> None:
@@ -61,18 +66,16 @@ async def run() -> None:
             fanout.FEED_GROUP,
             CONSUMER_NAME,
             {fanout.FEED_STREAM: ">"},
-            count=10,
-            block=5000,
+            count=settings.worker_batch_size,
+            block=settings.worker_block_ms,
         )
         if not resp:
             continue
         for _stream, messages in resp:
-            for msg_id, fields in messages:
-                try:
-                    await _process(msg_id, fields)
-                except Exception:
-                    # Left unacked on purpose; Phase 5 adds reclaim + dead-letter.
-                    logger.exception("fan-out failed for message %s", msg_id)
+            # Process the batch concurrently — each message overlaps its DB/Redis I/O.
+            await asyncio.gather(
+                *(_process(msg_id, fields) for msg_id, fields in messages)
+            )
 
 
 if __name__ == "__main__":

@@ -98,3 +98,32 @@ async def test_timeline_trimmed_to_max_size(
     assert await redis_conn.zcard(key) == 3
     kept = sorted(int(m) for m in await redis_conn.zrange(key, 0, -1))
     assert kept == sorted(pids)[-3:]  # newest 3 retained
+
+
+async def test_fan_out_chunked_reaches_all_followers(
+    client, make_user, db_session, redis_conn, monkeypatch
+):
+    monkeypatch.setattr(settings, "fanout_chunk_size", 2)
+    author, ah = await make_user("chunkauthor@example.com", username="chunkauthor")
+
+    followers = []
+    for i in range(3):
+        u, uh = await make_user(f"chunkf{i}@example.com", username=f"chunkf{i}")
+        await client.post("/follow", json={"followee_id": author["id"]}, headers=uh)
+        followers.append((u, uh))
+
+    # A seed post + each follower reading their feed materializes their timelines.
+    await client.post("/posts", json={"content": "seed"}, headers=ah)
+    for u, uh in followers:
+        await client.get("/feed", headers=uh)
+        assert await redis_conn.exists(timeline_key(u["id"]))
+
+    # Fan out a new post; chunk size (2) < number of target timelines (4).
+    pid = (await client.post("/posts", json={"content": "new"}, headers=ah)).json()[
+        "id"
+    ]
+    await fanout.fan_out_post(db_session, redis_conn, pid, author["id"])
+
+    for u, _uh in followers:
+        members = await redis_conn.zrange(timeline_key(u["id"]), 0, -1)
+        assert str(pid) in members

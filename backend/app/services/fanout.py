@@ -44,17 +44,21 @@ async def fan_out_post(
     targets.add(author_id)  # the author sees their own posts in their feed
     keys = [timeline_key(uid) for uid in targets]
 
-    # One round-trip to find which timelines are materialized, one to update them.
-    async with redis.pipeline(transaction=False) as pipe:
-        for key in keys:
-            pipe.exists(key)
-        exists_flags = await pipe.execute()
+    # Process in bounded chunks so a high-follower author doesn't build one giant pipeline.
+    for start in range(0, len(keys), settings.fanout_chunk_size):
+        chunk = keys[start : start + settings.fanout_chunk_size]
 
-    async with redis.pipeline(transaction=False) as pipe:
-        for key, materialized in zip(keys, exists_flags):
-            if materialized:
-                pipe.zadd(key, {str(post_id): float(post_id)})
-                # Trim to the newest `timeline_max_size` ids to bound memory (2.6).
-                pipe.zremrangebyrank(key, 0, -(settings.timeline_max_size + 1))
-                pipe.expire(key, settings.timeline_ttl_seconds)
-        await pipe.execute()
+        # One round-trip to find which timelines are materialized, one to update them.
+        async with redis.pipeline(transaction=False) as pipe:
+            for key in chunk:
+                pipe.exists(key)
+            exists_flags = await pipe.execute()
+
+        async with redis.pipeline(transaction=False) as pipe:
+            for key, materialized in zip(chunk, exists_flags):
+                if materialized:
+                    pipe.zadd(key, {str(post_id): float(post_id)})
+                    # Trim to the newest `timeline_max_size` ids to bound memory (2.6).
+                    pipe.zremrangebyrank(key, 0, -(settings.timeline_max_size + 1))
+                    pipe.expire(key, settings.timeline_ttl_seconds)
+            await pipe.execute()

@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     worker_batch_size: int = 20
     worker_block_ms: int = 5000
 
+    # Connection pools (Phase 4.5)
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_timeout: int = 30
+    db_pool_recycle: int = 1800
+    redis_max_connections: int = 50
+
     # Celebrity hybrid fan-out (Phase 3)
     celebrity_threshold: int = 10000
     celebrity_cache_size: int = 800

@@ -26,7 +26,7 @@ demoable system — never a half-broken one.
 | 1 — MVP + auth (fan-out-on-read) | Done | 1.1–1.15 complete: full product + likes/comments + integration tests (41 passing) |
 | 2 — Redis timelines + workers | Done | 2.1–2.6 complete: Redis-backed feed, fan-out worker + enqueue on write, timeline trimming |
 | 3 — Celebrity hybrid | Done | 3.1–3.4 complete: hybrid fan-out (classify, skip fan-out, cache, read-time merge) |
-| 4 — Optimization + benchmarks | In progress | 4.1–4.4 done (keyset audit; MGET hydration; batched worker; DB indexing); 4.5 next |
+| 4 — Optimization + benchmarks | In progress | 4.1–4.5 done (keyset audit; MGET hydration; batched worker; DB indexing; connection pools); 4.6 next |
 | 5 — Fault tolerance | Not started | |
 | 6 — Observability | Not started | |
 | 7 — Packaging + deploy | Not started | |
@@ -62,9 +62,9 @@ returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the Do
 
 ### Current state snapshot (files)
 - `backend/app/main.py` — FastAPI app; CORS for the frontend; `/healthz` pings Postgres + Redis; includes auth/users/follows/posts/feed routers; lifespan disposes the engine + Redis client
-- `backend/app/config.py` — pydantic-settings; required `DATABASE_URL` + `JWT_SECRET_KEY` (+ `redis_url`, `timeline_max_size`/`timeline_ttl_seconds`, `feed_stream_maxlen`, `post_cache_ttl_seconds`, `fanout_chunk_size`/`worker_batch_size`/`worker_block_ms`, `celebrity_threshold`/`celebrity_cache_size`, `follower_count_ttl_seconds`, `jwt_algorithm`, `access_token_expire_minutes`, `cors_origins`)
-- `backend/app/redis_client.py` — shared async Redis client (`redis.asyncio`, `decode_responses=True`) + `get_redis` dependency [2.1]
-- `backend/app/db.py` — async SQLAlchemy engine + `async_sessionmaker` + `get_session()` dependency
+- `backend/app/config.py` — pydantic-settings; required `DATABASE_URL` + `JWT_SECRET_KEY` (+ `redis_url`, `timeline_max_size`/`timeline_ttl_seconds`, `feed_stream_maxlen`, `post_cache_ttl_seconds`, `fanout_chunk_size`/`worker_batch_size`/`worker_block_ms`, `db_pool_size`/`db_max_overflow`/`db_pool_timeout`/`db_pool_recycle`/`redis_max_connections`, `celebrity_threshold`/`celebrity_cache_size`, `follower_count_ttl_seconds`, `jwt_algorithm`, `access_token_expire_minutes`, `cors_origins`)
+- `backend/app/redis_client.py` — shared async Redis client (`redis.asyncio`, `decode_responses=True`, bounded `max_connections`) + `get_redis` dependency [2.1/4.5]
+- `backend/app/db.py` — async SQLAlchemy engine (sized pool: `pool_size`/`max_overflow`/`pool_timeout`/`pool_recycle`/`pool_pre_ping`) + `async_sessionmaker` + `get_session()` dependency
 - `backend/app/models.py` — SQLAlchemy models (`Base`): `users` (`email` + nullable `username` + `password_hash`), `follows` (+`ix_follows_followee_id`), `posts` (+`ix_posts_author_id_id`), `likes` (+`ix_likes_post_id`), `comments` (+`ix_comments_post_id_id`)
 - `backend/app/security.py` — bcrypt password hashing + JWT encode/decode
 - `backend/app/deps.py` — `current_user` dependency (validates the JWT bearer token)
@@ -398,7 +398,7 @@ the classic Twitter timeline scalability problem."
 - **4.2 — Batch hydration + post cache** ✅ — feed post bodies are hydrated from a Redis `post:{id}` cache via a single `MGET` (cache-aside: misses batch-load from Postgres and write back with `post_cache_ttl_seconds`). On a warm cache, hydration is one Redis round-trip and zero Postgres. Post bodies are immutable, so the only staleness is an author renaming (bounded by TTL). _Done when:_ feed hydration is one round-trip per page. _(Delivered: `feed.hydrate_posts` rewrite + `HydratedPost`, router builds items from it; 1 test; 61 total. Like/comment counts still batch-query Postgres — a separate Redis-counter optimization.)_
 - **4.3 — Worker batching + concurrency** ✅ — `fan_out_post` pushes to follower timelines in bounded chunks (`fanout_chunk_size`, 500) so a high-follower author never builds one giant pipeline; the worker reads stream batches (`XREADGROUP COUNT worker_batch_size BLOCK worker_block_ms`) and processes each batch **concurrently** via `asyncio.gather` (overlapping DB/Redis I/O), acking per message. _Done when:_ fan-out throughput improves measurably. _(Delivered: `services/fanout.py` chunking + `worker/main.py` batch/concurrency + config knobs; 1 chunking-correctness test; 62 total. Needs a worker restart to take effect.)_
 - **4.4 — DB indexing pass** ✅ — added `ix_follows_followee_id` on `follows(followee_id)` (migration `79eaa3794e1d`) — the followers lookup (fan-out + follower counts) wasn't covered by the PK's leading `follower_id`. Verified via `EXPLAIN`: the followers query uses `Index Scan using ix_follows_followee_id`; the user-posts/feed query uses the existing `ix_posts_author_id_id (author_id, id)` (already covers `ORDER BY id DESC` via a backward scan). _Done when:_ key queries use index scans. _(Delivered: model + migration; 62 tests green. Note: the plan's `follows(follower_id)` is already the PK's leading column, so no separate index is needed.)_
-- **4.5 — Connection pooling** — tune asyncpg and Redis pool sizes for target concurrency. _Done when:_ pools are sized and stable under load.
+- **4.5 — Connection pooling** ✅ — the async SQLAlchemy engine now has an explicit, configurable pool (`db_pool_size` 10 + `db_max_overflow` 20, `db_pool_timeout`, `db_pool_recycle`, `pool_pre_ping`); the Redis client is bounded by `redis_max_connections` (50). Sizes are per-process (API + worker each), kept well under Postgres's default `max_connections=100`. _Done when:_ pools are sized and stable under load. _(Delivered: `config` + `db.py` + `redis_client.py`; 2 infra tests; 64 total. Worker restarted to apply. Load-stability is exercised in 4.6.)_
 - **4.6 — Load-test harness** — locust or custom asyncio driver at increasing concurrency. _Done when:_ a repeatable load test exists.
 - **4.7 — Benchmark + record** — capture feed-read p50/p95/p99, post-to-visible latency, throughput; before/after vs Phase 1; table + chart in README. _Done when:_ numbers are documented.
 

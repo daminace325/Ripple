@@ -8,7 +8,12 @@ from redis.asyncio import Redis
 
 from app.config import settings
 
-redis_client: Redis = Redis.from_url(settings.redis_url, decode_responses=True)
+# Bounded connection pool (Phase 4.5) shared across the app / worker process.
+redis_client: Redis = Redis.from_url(
+    settings.redis_url,
+    decode_responses=True,
+    max_connections=settings.redis_max_connections,
+)
 
 
 async def get_redis() -> Redis:

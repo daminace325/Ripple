@@ -43,7 +43,12 @@ class Follow(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    __table_args__ = (PrimaryKeyConstraint("follower_id", "followee_id"),)
+    __table_args__ = (
+        PrimaryKeyConstraint("follower_id", "followee_id"),
+        # Followers lookup (fan-out + follower counts): WHERE followee_id = ?.
+        # The PK covers WHERE follower_id = ? (followees) but not this direction.
+        Index("ix_follows_followee_id", "followee_id"),
+    )
 
 
 class Post(Base):

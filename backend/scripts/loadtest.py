@@ -4,7 +4,7 @@ Fires authenticated `GET /feed` requests at one or more concurrency levels and r
 latency percentiles (p50/p95/p99) and throughput (req/s). Used to capture the benchmark
 numbers in 4.7.
 
-Prereqs: the API is running and the DB is seeded (`python -m scripts.seed ...`).
+Prereqs: the API is running and the DB is seeded (`python -m scripts.seed_loadtest ...`).
 
 Examples (from ``backend/``, venv active):
     python -m scripts.loadtest --users 20 --requests 2000 --concurrency 10,50,100

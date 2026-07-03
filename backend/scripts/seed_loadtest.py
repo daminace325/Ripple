@@ -1,12 +1,16 @@
-"""Seed demo data: N users, a random follow graph, and posts.
+"""Seed a large synthetic dataset for load testing: N users, a random follow graph, and posts.
+
+Users are ``seeduser{i}@example.com`` (username ``seeduser{i}``, password "password123") —
+exactly what ``scripts.loadtest`` logs in as, so seed here first, then run the harness.
 
 Run from the backend/ folder (with the venv active):
 
-    python -m scripts.seed                 # defaults: 20 users, 5 posts each, 5 follows each
-    python -m scripts.seed --users 100 --posts 10 --follows 15
+    python -m scripts.seed_loadtest                                 # 200 users, 20 posts, 50 follows each
+    python -m scripts.seed_loadtest --users 300 --posts 50 --follows 100
 
 Re-running first clears previously seeded data (seeduser* at example.com), so it is
 safe to run repeatedly. Every seeded user shares the password "password123".
+Clean up afterwards with ``python -m scripts.unseed_loadtest``.
 """
 
 import argparse
@@ -90,10 +94,10 @@ async def seed(n_users: int, n_posts: int, n_follows: int) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Seed demo data for Ripple.")
-    parser.add_argument("--users", type=int, default=20, help="number of users")
-    parser.add_argument("--posts", type=int, default=5, help="posts per user")
-    parser.add_argument("--follows", type=int, default=5, help="follows per user")
+    parser = argparse.ArgumentParser(description="Seed a large load-test dataset for Ripple.")
+    parser.add_argument("--users", type=int, default=200, help="number of users")
+    parser.add_argument("--posts", type=int, default=20, help="posts per user")
+    parser.add_argument("--follows", type=int, default=50, help="follows per user")
     args = parser.parse_args()
     asyncio.run(seed(args.users, args.posts, args.follows))
 

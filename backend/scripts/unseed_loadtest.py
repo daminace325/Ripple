@@ -1,9 +1,9 @@
-"""Remove seeded demo data.
+"""Remove load-test seed data.
 
-Deletes every seeded user (seeduser* at example.com); their posts and follows
+Deletes every load-test user (seeduser* at example.com); their posts and follows
 cascade. Run from the backend/ folder (with the venv active):
 
-    python -m scripts.unseed
+    python -m scripts.unseed_loadtest
 """
 
 import asyncio
@@ -12,7 +12,7 @@ from sqlalchemy import delete, func, select
 
 from app.db import SessionLocal
 from app.models import User
-from scripts.seed import SEED_DOMAIN, SEED_PREFIX
+from scripts.seed_loadtest import SEED_DOMAIN, SEED_PREFIX
 
 
 async def unseed() -> None:

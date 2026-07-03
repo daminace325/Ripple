@@ -26,7 +26,7 @@ demoable system — never a half-broken one.
 | 1 — MVP + auth (fan-out-on-read) | Done | 1.1–1.15 complete: full product + likes/comments + integration tests (41 passing) |
 | 2 — Redis timelines + workers | Done | 2.1–2.6 complete: Redis-backed feed, fan-out worker + enqueue on write, timeline trimming |
 | 3 — Celebrity hybrid | Done | 3.1–3.4 complete: hybrid fan-out (classify, skip fan-out, cache, read-time merge) |
-| 4 — Optimization + benchmarks | In progress | 4.1–4.5 done (keyset audit; MGET hydration; batched worker; DB indexing; connection pools); 4.6 next |
+| 4 — Optimization + benchmarks | In progress | 4.1–4.6 done (audit; hydration; batched worker; indexing; pools; load harness); 4.7 next |
 | 5 — Fault tolerance | Not started | |
 | 6 — Observability | Not started | |
 | 7 — Packaging + deploy | Not started | |
@@ -78,7 +78,7 @@ returns `{"status":"ok","postgres":"up"}` — done. (The Redis portion of the Do
 - `backend/app/services/fanout.py` — fan-out: `enqueue_post` (`XADD feed_stream`, capped via `MAXLEN ~`) + `fan_out_post` (push post id into followers' + author's **materialized** timelines only, in bounded `fanout_chunk_size` chunks) [2.4/2.5, 4.3]
 - `backend/worker/main.py` — fan-out worker (separate venv process); consumer group on `feed_stream`, `XREADGROUP` batches (`worker_batch_size`/`worker_block_ms`) processed **concurrently** (`asyncio.gather`) → `fan_out_post` → per-message `XACK`; run `python -m worker.main` [2.4, 4.3]
 - `backend/app/routers/auth.py` — `POST /auth/register`, `POST /auth/login` (email); `backend/app/routers/users.py` — `GET /users/me`, `PATCH /users/me`, `GET /users/search`, `GET /users/{id}`, `GET /users/by-username/{username}` (profile + counts); `backend/app/routers/follows.py` — `POST`/`DELETE /follow`; `backend/app/routers/posts.py` — `POST /posts` (enqueues fan-out), `GET /posts/{id}` (detail + author + likes), `GET /users/{id}/posts` (enriched, auth), `POST`/`DELETE /posts/{id}/like`, `GET`/`POST /posts/{id}/comments`; `backend/app/routers/feed.py` — `GET /feed` (Redis timeline; items include author + like/comment counts)
-- `backend/scripts/seed.py` — demo data generator (N users, random follow graph, posts; `python -m scripts.seed`); `backend/scripts/unseed.py` — removes seeded users (`python -m scripts.unseed`)
+- `backend/scripts/seed.py` — demo data generator (N users, random follow graph, posts; `python -m scripts.seed`); `backend/scripts/unseed.py` — removes seeded users (`python -m scripts.unseed`); `backend/scripts/loadtest.py` — async+httpx feed load-test harness (concurrency sweep → rps + p50/p95/p99) [4.6]
 - `backend/alembic/` + `alembic.ini` — Alembic (async); migrations: `dcfce07fa8f2` (schema), `30f2d801d8cb` (password_hash), `53dcc349a3d9` (email + nullable username), `0be43df3a9c7` (likes), `80080e70e043` (comments), `79eaa3794e1d` (follows.followee_id index)
 - `backend/requirements.txt` — fastapi, uvicorn[standard], sqlalchemy[asyncio], asyncpg, pydantic-settings, alembic, bcrypt, pyjwt, email-validator (version-pinned); test deps pytest, pytest-asyncio, httpx
 - `backend/tests/` + `pytest.ini` — pytest + httpx integration suite (conftest fixtures + 7 modules, 41 tests); runs against an auto-created `<db>_test` database with per-test schema rebuild
@@ -391,7 +391,7 @@ the classic Twitter timeline scalability problem."
 ## Phase 4 — Optimization & performance (make it fast, prove it)
 **Goal:** drive latency down and throughput up, with **measured before/after numbers**.
 
-**Status:** In progress — 4.1–4.3 done (keyset-cursor audit; `MGET` post-cache hydration; batched fan-out + concurrent worker). 4.4 next.
+**Status:** In progress — 4.1–4.6 done (keyset audit; `MGET` hydration; batched worker; DB indexing; connection pools; load-test harness). 4.7 (benchmark + record) next.
 
 **Sub-phases** (each an independent, self-contained chunk)
 - **4.1 — Cursor pagination audit** ✅ — confirmed zero `OFFSET`/`.offset()` in app code; the feed already uses keyset cursors; added keyset `cursor` pagination to `GET /users/{id}/posts` (was a bare `LIMIT`). Search/comments use bounded `LIMIT` (small result sets, no `OFFSET`). _Done when:_ no `OFFSET` remains on hot paths. _(Delivered: `posts.get_user_posts` + router take a `cursor`; 1 test; 60 total.)_
@@ -399,8 +399,8 @@ the classic Twitter timeline scalability problem."
 - **4.3 — Worker batching + concurrency** ✅ — `fan_out_post` pushes to follower timelines in bounded chunks (`fanout_chunk_size`, 500) so a high-follower author never builds one giant pipeline; the worker reads stream batches (`XREADGROUP COUNT worker_batch_size BLOCK worker_block_ms`) and processes each batch **concurrently** via `asyncio.gather` (overlapping DB/Redis I/O), acking per message. _Done when:_ fan-out throughput improves measurably. _(Delivered: `services/fanout.py` chunking + `worker/main.py` batch/concurrency + config knobs; 1 chunking-correctness test; 62 total. Needs a worker restart to take effect.)_
 - **4.4 — DB indexing pass** ✅ — added `ix_follows_followee_id` on `follows(followee_id)` (migration `79eaa3794e1d`) — the followers lookup (fan-out + follower counts) wasn't covered by the PK's leading `follower_id`. Verified via `EXPLAIN`: the followers query uses `Index Scan using ix_follows_followee_id`; the user-posts/feed query uses the existing `ix_posts_author_id_id (author_id, id)` (already covers `ORDER BY id DESC` via a backward scan). _Done when:_ key queries use index scans. _(Delivered: model + migration; 62 tests green. Note: the plan's `follows(follower_id)` is already the PK's leading column, so no separate index is needed.)_
 - **4.5 — Connection pooling** ✅ — the async SQLAlchemy engine now has an explicit, configurable pool (`db_pool_size` 10 + `db_max_overflow` 20, `db_pool_timeout`, `db_pool_recycle`, `pool_pre_ping`); the Redis client is bounded by `redis_max_connections` (50). Sizes are per-process (API + worker each), kept well under Postgres's default `max_connections=100`. _Done when:_ pools are sized and stable under load. _(Delivered: `config` + `db.py` + `redis_client.py`; 2 infra tests; 64 total. Worker restarted to apply. Load-stability is exercised in 4.6.)_
-- **4.6 — Load-test harness** — locust or custom asyncio driver at increasing concurrency. _Done when:_ a repeatable load test exists.
-- **4.7 — Benchmark + record** — capture feed-read p50/p95/p99, post-to-visible latency, throughput; before/after vs Phase 1; table + chart in README. _Done when:_ numbers are documented.
+- **4.6 — Load-test harness** ✅ — `scripts/loadtest.py`: a repeatable asyncio + httpx driver that logs in seed users, optionally warms caches, then sweeps configurable concurrency levels against `GET /feed`, reporting req/s + p50/p95/p99/max latency. _Done when:_ a repeatable load test exists. _(Delivered + smoke-tested: `python -m scripts.loadtest --users 20 --requests 2000 --concurrency 10,50,100 --warmup`. Numbers so far are dev-server/tiny-seed placeholders — 4.7 runs it against a large seed + production server config for the real before/after.)_
+- **4.7 — Benchmark + record** — capture feed-read p50/p95/p99, post-to-visible latency, throughput; before/after vs Phase 1; table + chart in README. _Done when:_ numbers are documented. **(Before/after needs the naive Phase 1 feed path kept behind a `FEED_BACKEND` flag + a large seed dataset — decide at the start of 4.7.)**
 
 **Definition of done**
 - Documented numbers, e.g. "feed read p99 < 100 ms at X RPS", "post-to-feed < 1s".

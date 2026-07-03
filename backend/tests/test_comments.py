@@ -58,3 +58,20 @@ async def test_comments_respects_limit(client, make_user):
     r = await client.get(f"/posts/{pid}/comments", params={"limit": 2}, headers=headers)
     assert r.status_code == 200
     assert len(r.json()) == 2
+
+
+async def test_comment_count_backed_by_redis_counter(client, make_user, redis_conn):
+    from app.services.comments import comment_count_key
+
+    _, headers = await make_user("ccr@example.com", username="ccredis")
+    pid = (
+        await client.post("/posts", json={"content": "p"}, headers=headers)
+    ).json()["id"]
+
+    await client.post(f"/posts/{pid}/comments", json={"content": "a"}, headers=headers)
+    await client.post(f"/posts/{pid}/comments", json={"content": "b"}, headers=headers)
+
+    # Reading the detail backfills the Redis counter from Postgres.
+    d = await client.get(f"/posts/{pid}", headers=headers)
+    assert d.json()["comment_count"] == 2
+    assert await redis_conn.get(comment_count_key(pid)) == "2"

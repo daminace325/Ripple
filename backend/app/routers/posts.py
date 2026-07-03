@@ -49,6 +49,7 @@ async def get_post(
     post_id: int,
     current_user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[Redis, Depends(get_redis)],
 ) -> PostDetail:
     post = await posts_service.get_post(session, post_id)
     if post is None:
@@ -60,8 +61,10 @@ async def get_post(
     )
     return PostDetail(
         id=post.id, content=post.content, created_at=post.created_at,
-        author=post.author, like_count=await likes_service.like_count(session, post_id),
-        liked=liked, comment_count=await comments_service.comment_count(session, post_id),
+        author=post.author,
+        like_count=await likes_service.get_like_count(redis, session, post_id),
+        liked=liked,
+        comment_count=await comments_service.get_comment_count(redis, session, post_id),
     )
 
 
@@ -70,6 +73,7 @@ async def list_user_posts(
     user_id: int,
     current_user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[Redis, Depends(get_redis)],
     cursor: Annotated[int | None, Query(ge=1)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> list[PostDetail]:
@@ -80,9 +84,9 @@ async def list_user_posts(
         )
     posts = await posts_service.get_user_posts(session, user_id, cursor, limit)
     ids = [p.id for p in posts]
-    counts = await likes_service.like_counts(session, ids)
+    counts = await likes_service.get_like_counts(redis, session, ids)
     liked = await likes_service.liked_ids(session, current_user.id, ids)
-    ccounts = await comments_service.comment_counts(session, ids)
+    ccounts = await comments_service.get_comment_counts(redis, session, ids)
     return [
         PostDetail(
             id=p.id, content=p.content, created_at=p.created_at, author=user,
@@ -98,15 +102,17 @@ async def like_post(
     post_id: int,
     current_user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[Redis, Depends(get_redis)],
 ) -> LikeResponse:
     if await session.get(Post, post_id) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Post not found"
         )
-    await likes_service.like_post(session, current_user.id, post_id)
+    if await likes_service.like_post(session, current_user.id, post_id):
+        await likes_service.change_like_count(redis, post_id, 1)
     return LikeResponse(
         post_id=post_id, liked=True,
-        like_count=await likes_service.like_count(session, post_id),
+        like_count=await likes_service.get_like_count(redis, session, post_id),
     )
 
 
@@ -115,15 +121,17 @@ async def unlike_post(
     post_id: int,
     current_user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[Redis, Depends(get_redis)],
 ) -> LikeResponse:
     if await session.get(Post, post_id) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Post not found"
         )
-    await likes_service.unlike_post(session, current_user.id, post_id)
+    if await likes_service.unlike_post(session, current_user.id, post_id):
+        await likes_service.change_like_count(redis, post_id, -1)
     return LikeResponse(
         post_id=post_id, liked=False,
-        like_count=await likes_service.like_count(session, post_id),
+        like_count=await likes_service.get_like_count(redis, session, post_id),
     )
 
 
@@ -151,11 +159,14 @@ async def create_comment(
     payload: CommentCreate,
     current_user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[Redis, Depends(get_redis)],
 ) -> CommentOut:
     if await session.get(Post, post_id) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Post not found"
         )
-    return await comments_service.create_comment(
+    comment = await comments_service.create_comment(
         session, post_id, current_user.id, payload.content
     )
+    await comments_service.change_comment_count(redis, post_id, 1)
+    return comment

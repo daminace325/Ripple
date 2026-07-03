@@ -50,3 +50,20 @@ async def test_like_count_reflects_multiple_users(client, make_user):
 
     d = await client.get(f"/posts/{pid}", headers=ah)
     assert d.json()["like_count"] == 2
+
+
+async def test_like_count_backed_by_redis_counter(client, make_user, redis_conn):
+    from app.services.likes import like_count_key
+
+    _, headers = await make_user("lkr@example.com", username="lkredis")
+    pid = (
+        await client.post("/posts", json={"content": "r"}, headers=headers)
+    ).json()["id"]
+
+    # Liking materializes the Redis counter (backfilled from Postgres in the response).
+    await client.post(f"/posts/{pid}/like", headers=headers)
+    assert await redis_conn.get(like_count_key(pid)) == "1"
+
+    # Unliking decrements the same counter in place.
+    await client.delete(f"/posts/{pid}/like", headers=headers)
+    assert await redis_conn.get(like_count_key(pid)) == "0"

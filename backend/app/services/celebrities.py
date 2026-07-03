@@ -53,6 +53,42 @@ async def is_celebrity(
     return count >= settings.celebrity_threshold
 
 
+async def get_follower_counts(
+    redis: Redis, session: AsyncSession, user_ids: list[int]
+) -> dict[int, int]:
+    """Follower counts for many users in one Redis `MGET` (batched backfill on misses).
+
+    Replaces N sequential `get_follower_count` calls on the feed hot path.
+    """
+    unique = list(dict.fromkeys(user_ids))
+    if not unique:
+        return {}
+
+    cached = await redis.mget([follower_count_key(uid) for uid in unique])
+    counts: dict[int, int] = {}
+    missing: list[int] = []
+    for uid, raw in zip(unique, cached):
+        if raw is not None:
+            counts[uid] = max(0, int(raw))
+        else:
+            missing.append(uid)
+
+    if missing:
+        db_counts = await users_service.follower_counts(session, missing)
+        async with redis.pipeline(transaction=False) as pipe:
+            for uid in missing:
+                count = db_counts.get(uid, 0)
+                counts[uid] = count
+                pipe.set(
+                    follower_count_key(uid),
+                    count,
+                    ex=settings.follower_count_ttl_seconds,
+                )
+            await pipe.execute()
+
+    return counts
+
+
 async def add_recent_post(redis: Redis, user_id: int, post_id: int) -> None:
     """Record a celebrity's post in their recent-posts cache (trimmed)."""
     key = recent_posts_key(user_id)

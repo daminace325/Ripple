@@ -40,6 +40,20 @@ async def follower_count(session: AsyncSession, user_id: int) -> int:
     )
 
 
+async def follower_counts(
+    session: AsyncSession, user_ids: list[int]
+) -> dict[int, int]:
+    """Follower counts for many users in one query. Missing ids default to 0."""
+    if not user_ids:
+        return {}
+    rows = await session.execute(
+        select(Follow.followee_id, func.count())
+        .where(Follow.followee_id.in_(user_ids))
+        .group_by(Follow.followee_id)
+    )
+    return {uid: n for uid, n in rows.all()}
+
+
 async def following_count(session: AsyncSession, user_id: int) -> int:
     return (
         await session.scalar(

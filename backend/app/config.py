@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     feed_stream_maxlen: int = 10000
     # Per-post body cache (`post:{id}`) for one-round-trip feed hydration (Phase 4.2).
     post_cache_ttl_seconds: int = 3600
+    # Redis engagement counters (`post:{id}:likes` / `:comments`) — self-healing TTL (Phase 4).
+    engagement_count_ttl_seconds: int = 3600
     # Fan-out worker tuning (Phase 4.3).
     fanout_chunk_size: int = 500
     worker_batch_size: int = 20
@@ -32,6 +34,9 @@ class Settings(BaseSettings):
     celebrity_cache_size: int = 800
     # TTL lets the cached follower count self-heal from Postgres if it ever drifts.
     follower_count_ttl_seconds: int = 3600
+
+    # Feed backend for benchmarking (Phase 4.7): "redis" (hybrid) or "postgres" (naive Phase 1).
+    feed_backend: str = "redis"
 
     # Auth / JWT
     jwt_secret_key: str

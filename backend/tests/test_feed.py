@@ -115,3 +115,26 @@ async def test_feed_hydration_populates_post_cache(client, make_user, redis_conn
         it["id"] == pid and it["content"] == "cached body" for it in body["items"]
     )
     assert await redis_conn.exists(post_cache_key(pid))
+
+
+async def test_feed_naive_backend_matches(client, make_user, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "feed_backend", "postgres")
+    _, ah = await make_user("nb@example.com", username="naiveviewer")
+    bob, bh = await make_user("nbob@example.com", username="naivebob")
+    _, ch = await make_user("ncarol@example.com", username="naivecarol")
+    await client.post("/follow", json={"followee_id": bob["id"]}, headers=ah)
+
+    own = (await client.post("/posts", json={"content": "own"}, headers=ah)).json()["id"]
+    bob_post = (
+        await client.post("/posts", json={"content": "bob"}, headers=bh)
+    ).json()["id"]
+    carol_post = (
+        await client.post("/posts", json={"content": "carol"}, headers=ch)
+    ).json()["id"]
+
+    ids = [it["id"] for it in (await client.get("/feed", headers=ah)).json()["items"]]
+    assert own in ids
+    assert bob_post in ids
+    assert carol_post not in ids

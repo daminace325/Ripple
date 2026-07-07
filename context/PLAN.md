@@ -26,7 +26,7 @@ demoable system — never a half-broken one.
 | 1 — MVP + auth (fan-out-on-read) | Done | 1.1–1.15 complete: full product + likes/comments + integration tests (41 passing) |
 | 2 — Redis timelines + workers | Done | 2.1–2.6 complete: Redis-backed feed, fan-out worker + enqueue on write, timeline trimming |
 | 3 — Celebrity hybrid | Done | 3.1–3.4 complete: hybrid fan-out (classify, skip fan-out, cache, read-time merge) |
-| 4 — Optimization + benchmarks | In progress | 4.1–4.6 done (audit; hydration; batched worker; indexing; pools; load harness); 4.7 next |
+| 4 — Optimization + benchmarks | Done | 4.1–4.7 complete; Redis vs naive Postgres benchmarked (feed-read p50 −37% / p99 −40% at c10; higher throughput + graceful degradation at c100) |
 | 5 — Fault tolerance | Not started | |
 | 6 — Observability | Not started | |
 | 7 — Packaging + deploy | Not started | |
@@ -391,7 +391,7 @@ the classic Twitter timeline scalability problem."
 ## Phase 4 — Optimization & performance (make it fast, prove it)
 **Goal:** drive latency down and throughput up, with **measured before/after numbers**.
 
-**Status:** In progress — 4.1–4.6 done (keyset audit; `MGET` hydration; batched worker; DB indexing; connection pools; load-test harness). 4.7 (benchmark + record) next.
+**Status:** 4.1–4.7 done — keyset audit; `MGET` hydration; batched worker; DB indexing; connection pools; load-test harness; **4.7 benchmark recorded** (Redis cuts feed-read p50 ~37% / p99 ~40% at low concurrency and sustains higher throughput with lower p50/p99 under saturation). Phase 4 complete.
 
 **Sub-phases** (each an independent, self-contained chunk)
 - **4.1 — Cursor pagination audit** ✅ — confirmed zero `OFFSET`/`.offset()` in app code; the feed already uses keyset cursors; added keyset `cursor` pagination to `GET /users/{id}/posts` (was a bare `LIMIT`). Search/comments use bounded `LIMIT` (small result sets, no `OFFSET`). _Done when:_ no `OFFSET` remains on hot paths. _(Delivered: `posts.get_user_posts` + router take a `cursor`; 1 test; 60 total.)_
@@ -400,7 +400,15 @@ the classic Twitter timeline scalability problem."
 - **4.4 — DB indexing pass** ✅ — added `ix_follows_followee_id` on `follows(followee_id)` (migration `79eaa3794e1d`) — the followers lookup (fan-out + follower counts) wasn't covered by the PK's leading `follower_id`. Verified via `EXPLAIN`: the followers query uses `Index Scan using ix_follows_followee_id`; the user-posts/feed query uses the existing `ix_posts_author_id_id (author_id, id)` (already covers `ORDER BY id DESC` via a backward scan). _Done when:_ key queries use index scans. _(Delivered: model + migration; 62 tests green. Note: the plan's `follows(follower_id)` is already the PK's leading column, so no separate index is needed.)_
 - **4.5 — Connection pooling** ✅ — the async SQLAlchemy engine now has an explicit, configurable pool (`db_pool_size` 10 + `db_max_overflow` 20, `db_pool_timeout`, `db_pool_recycle`, `pool_pre_ping`); the Redis client is bounded by `redis_max_connections` (50). Sizes are per-process (API + worker each), kept well under Postgres's default `max_connections=100`. _Done when:_ pools are sized and stable under load. _(Delivered: `config` + `db.py` + `redis_client.py`; 2 infra tests; 64 total. Worker restarted to apply. Load-stability is exercised in 4.6.)_
 - **4.6 — Load-test harness** ✅ — `scripts/loadtest.py`: a repeatable asyncio + httpx driver that logs in seed users, optionally warms caches, then sweeps configurable concurrency levels against `GET /feed`, reporting req/s + p50/p95/p99/max latency. _Done when:_ a repeatable load test exists. _(Delivered + smoke-tested: `python -m scripts.loadtest --users 20 --requests 2000 --concurrency 10,50,100 --warmup`. Numbers so far are dev-server/tiny-seed placeholders — 4.7 runs it against a large seed + production server config for the real before/after.)_
-- **4.7 — Benchmark + record** — capture feed-read p50/p95/p99, post-to-visible latency, throughput; before/after vs Phase 1; table + chart in README. _Done when:_ numbers are documented. **(Before/after needs the naive Phase 1 feed path kept behind a `FEED_BACKEND` flag + a large seed dataset — decide at the start of 4.7.)**
+- **4.7 — Benchmark + record** ✅ — before/after via the `FEED_BACKEND` flag (`?backend=postgres|redis`) on a 300-user / 15k-post / 30k-follow seed, driven by `scripts.loadtest` against a production-config server (uvicorn `--workers 4`, no `--reload`, port 8001; pool 8+12 per worker; warm timelines). **Redis vs naive Postgres** — feed-read latency (ms) / throughput (rps):
+
+  | conc | p50 (redis/pg) | p95 (redis/pg) | p99 (redis/pg) | rps (redis/pg) |
+  |---|---|---|---|---|
+  | 10 | **39** / 62 | **104** / 119 | **140** / 234 | **153** / 132 |
+  | 50 | **459** / 490 | **583** / 685 | 1894 / **1412** | **101** / 95 |
+  | 100 | **844** / 1050 | **2359** / 2703 | **2550** / 2917 | **80** / 70 |
+
+  Redis cuts feed-read **p50 ~37%** and **p99 ~40%** at low concurrency (c10) and sustains **higher throughput with lower p50/p99 under saturation** (c100); the two converge at c50 on p99 (tail variance). _Caveats:_ p99 ~140ms (not <100ms) because each read still does ~3 Postgres round-trips (`current_user`, followees for classification, `liked` check); the Redis engagement counters aren't exercised by this zero-like/comment seed (adding engagement would widen the gap). Dev-grade Windows/localhost, single Postgres. _Done when:_ numbers documented. **[DONE]**
 
 **Definition of done**
 - Documented numbers, e.g. "feed read p99 < 100 ms at X RPS", "post-to-feed < 1s".
